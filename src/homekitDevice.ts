@@ -133,21 +133,16 @@ export class TTLockHomeKitDevice {
 
   private checkServices(): void {
     const services = [
-      this.platform.api.hap.Service.LockManagement,
       this.platform.api.hap.Service.LockMechanism,
       this.platform.api.hap.Service.Battery,
       this.platform.api.hap.Service.AccessCode,
-      this.platform.api.hap.Service.NFCAccess,
     ];
 
     services.forEach((svc) => {
       const checkedService: Service =
         this.platformAccessory.getService(svc) ??
         this.platformAccessory.addService(svc, this.name, this.platformAccessory.UUID);
-
-      if (checkedService.UUID !== this.platform.api.hap.Service.LockManagement.UUID) {
-        this.checkCharacteristics(checkedService);
-      }
+      this.checkCharacteristics(checkedService);
       return checkedService;
     });
   }
