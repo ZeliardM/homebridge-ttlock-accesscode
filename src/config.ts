@@ -31,25 +31,23 @@ export class ConfigParseError extends Error {
   }
 }
 
-export interface TTLockHomeKeyConfigInput {
+export interface TTLockAccessCodeConfigInput {
   name?: string;
   clientId?: string;
   clientSecret?: string;
   username?: string;
   password?: string;
-  color?: string;
   pollingInterval?: number;
   discoveryPollingInterval?: number;
   offlineInterval?: number;
 }
 
-export type TTLockHomeKeyConfig = {
+export type TTLockAccessCodeConfig = {
   name: string;
   clientId: string;
   clientSecret: string;
   username: string;
   password: string;
-  color: string;
   discoveryOptions: {
     pollingInterval: number;
     discoveryPollingInterval: number;
@@ -57,13 +55,12 @@ export type TTLockHomeKeyConfig = {
   };
 };
 
-export const defaultConfig: TTLockHomeKeyConfig = {
-  name: 'TTLockHomeKey',
+export const defaultConfig: TTLockAccessCodeConfig = {
+  name: 'TTLockAccessCode',
   clientId: '',
   clientSecret: '',
   username: '',
   password: '',
-  color: 'Tan',
   discoveryOptions: {
     pollingInterval: 5,
     discoveryPollingInterval: 300,
@@ -79,7 +76,6 @@ function validateConfig(config: Record<string, unknown>): string[] {
   validateType(config, 'clientSecret', 'string', errors);
   validateType(config, 'username', 'string', errors);
   validateType(config, 'password', 'string', errors);
-  validateType(config, 'color', 'string', errors);
   validateType(config, 'pollingInterval', 'number', errors);
   validateType(config, 'discoveryPollingInterval', 'number', errors);
   validateType(config, 'offlineInterval', 'number', errors);
@@ -98,7 +94,7 @@ function validateType(
   }
 }
 
-export function parseConfig(config: Record<string, unknown>): TTLockHomeKeyConfig {
+export function parseConfig(config: Record<string, unknown>): TTLockAccessCodeConfig {
   const errors = validateConfig(config);
   if (errors.length > 0) {
     throw new ConfigParseError('Error parsing config', errors);
@@ -108,7 +104,7 @@ export function parseConfig(config: Record<string, unknown>): TTLockHomeKeyConfi
     throw new ConfigParseError('Error parsing config');
   }
 
-  const c = { ...defaultConfig, ...config } as TTLockHomeKeyConfigInput;
+  const c = { ...defaultConfig, ...config } as TTLockAccessCodeConfigInput;
 
   return {
     name: c.name ?? defaultConfig.name,
@@ -116,7 +112,6 @@ export function parseConfig(config: Record<string, unknown>): TTLockHomeKeyConfi
     clientSecret: c.clientSecret ?? defaultConfig.clientSecret,
     username: c.username ?? defaultConfig.username,
     password: c.password ?? defaultConfig.password,
-    color: c.color ?? defaultConfig.color,
     discoveryOptions: {
       pollingInterval: (c.pollingInterval ?? defaultConfig.discoveryOptions.pollingInterval) * 1000,
       discoveryPollingInterval: (c.discoveryPollingInterval ?? defaultConfig.discoveryOptions.discoveryPollingInterval) * 1000,

@@ -1,8 +1,8 @@
 import type { API } from 'homebridge';
 
-import { TTLockHomeKeyPlatform } from './platform.js';
+import { TTLockAccessCodePlatform } from './platform.js';
 import { PLATFORM_NAME } from './settings.js';
 
 export default (api: API) => {
-  api.registerPlatform(PLATFORM_NAME, TTLockHomeKeyPlatform);
+  api.registerPlatform(PLATFORM_NAME, TTLockAccessCodePlatform);
 };

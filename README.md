@@ -6,14 +6,14 @@
 
 <span align="center">
 
-# Homebridge TTLock HomeKey Plug-In
+# Homebridge TTLock Access Code Plug-In
 
 </span>
 
 <p align="center">
-  <a href="https://github.com/ZeliardM/homebridge-ttlock-homekey/blob/latest/LICENSE"><img src="https://badgen.net/npm/license/homebridge-ttlock-homekey" alt="mit license"></a>
-  <a href="https://www.npmjs.com/package/homebridge-ttlock-homekey/v/latest"><img src="https://badgen.net/npm/v/homebridge-ttlock-homekey/latest?label=npm@latest" alt="latest npm version"></a>
-  <a href="https://www.npmjs.com/package/homebridge-ttlock-homekey/v/latest"><img src="https://badgen.net/npm/dt/homebridge-ttlock-homekey" alt="npm downloads total"></a>
+  <a href="https://github.com/ZeliardM/homebridge-ttlock-accesscode/blob/latest/LICENSE"><img src="https://badgen.net/npm/license/homebridge-ttlock-accesscode" alt="mit license"></a>
+  <a href="https://www.npmjs.com/package/homebridge-ttlock-accesscode/v/latest"><img src="https://badgen.net/npm/v/homebridge-ttlock-accesscode/latest?label=npm@latest" alt="latest npm version"></a>
+  <a href="https://www.npmjs.com/package/homebridge-ttlock-accesscode/v/latest"><img src="https://badgen.net/npm/dt/homebridge-ttlock-accesscode" alt="npm downloads total"></a>
   <a href="https://www.paypal.me/ZeliardM/USD/"><img src="https://badgen.net/badge/donate/paypal?color=orange" alt="donate"></a>
   <a href="https://github.com/sponsors/ZeliardM"><img src="https://badgen.net/badge/donate/github?color=orange" alt="donate"></a>
 </p>
@@ -21,7 +21,7 @@
 <div align="center">
 
 >## PLEASE READ!!!
->HomeKey Support is not integrated yet, but Access Code Features are working in HomeKit.
+>HomeKey Support is not physically possible with TTLock Readers, but Access Code Features are working in HomeKit.
 
 </div>
 
@@ -32,7 +32,6 @@ This is a [Homebridge](https://github.com/homebridge/homebridge) plug-in based f
 - Get the status of your TTLock devices.
 - Lock and unlock your TTLock devices.
 - Manage passcodes for your TTLock devices.
-- Integration into HomeKey for NFC Access to your TTLock devices.
 
 ## Requirements
 

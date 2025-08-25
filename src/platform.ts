@@ -7,8 +7,8 @@ import { TTLockHomeKitDevice } from './homekitDevice.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { lookup, lookupCharacteristicNameByUUID, isObjectLike } from './utils.js';
 import { TTLockApi } from './api/ttlockApi.js';
-import { BatteryLevel, Lock, LockDetails, LockIdList, LockState, NfcCardList, PasscodeList } from './types';
-import type { TTLockHomeKeyConfig } from './config.js';
+import { BatteryLevel, Lock, LockDetails, LockIdList, LockState, PasscodeList } from './types/index.js';
+import type { TTLockAccessCodeConfig } from './config.js';
 
 export type TTLockAccessoryContext = {
   id?: string;
@@ -16,11 +16,11 @@ export type TTLockAccessoryContext = {
   offline?: boolean;
 };
 
-export class TTLockHomeKeyPlatform implements DynamicPlatformPlugin {
+export class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private readonly homekitDevicesById: Map<string, TTLockHomeKitDevice> = new Map();
   public readonly configuredAccessories: Map<string, PlatformAccessory<TTLockAccessoryContext>> = new Map();
   public readonly offlineAccessories: Map<string, PlatformAccessory<TTLockAccessoryContext>> = new Map();
-  public config: TTLockHomeKeyConfig;
+  public config: TTLockAccessCodeConfig;
   public isShuttingDown = false;
   public ongoingTasks: Promise<void>[] = [];
   public periodicDeviceDiscoveryEmitter = new EventEmitter();
@@ -35,7 +35,7 @@ export class TTLockHomeKeyPlatform implements DynamicPlatformPlugin {
     this.config = parseConfig(config);
 
     this.api.on('didFinishLaunching', async () => {
-      this.log.info('TTLockHomeKey Platform finished launching');
+      this.log.info('TTLockAccessCode Platform finished launching');
       try {
         await this.createAndAuthenticateApi();
         await this.discoverDevices();
@@ -55,7 +55,7 @@ export class TTLockHomeKeyPlatform implements DynamicPlatformPlugin {
     });
 
     this.api.on('shutdown', async () => {
-      this.log.debug('TTLockHomeKey platform shutting down');
+      this.log.debug('TTLockAccessCode platform shutting down');
       this.isShuttingDown = true;
       await Promise.all(this.ongoingTasks);
       this.log.debug('All ongoing tasks completed. Platform is now shutting down.');
@@ -108,8 +108,7 @@ export class TTLockHomeKeyPlatform implements DynamicPlatformPlugin {
       const lockState: LockState = await this.ttLockApi.getLockState(lock.lockId);
       const lockBattery: BatteryLevel = await this.ttLockApi.getBatteryLevel(lock.lockId);
       const lockPassCodes: PasscodeList = await this.ttLockApi.getPasscodes(lock.lockId);
-      const lockNfcCards: NfcCardList = await this.ttLockApi.getNfcCards(lock.lockId);
-      const detailedLock: Lock = await this.ttLockApi.mapToLock(lockDetails, lockState, lockBattery, lockPassCodes, lockNfcCards);
+      const detailedLock: Lock = await this.ttLockApi.mapToLock(lockDetails, lockState, lockBattery, lockPassCodes);
       this.log.debug(`Detailed lock: ${JSON.stringify(detailedLock)}`);
       detailedLocks.push(detailedLock);
     }

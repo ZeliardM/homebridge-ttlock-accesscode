@@ -4,7 +4,7 @@ import { Mutex } from 'async-mutex';
 import crypto from 'crypto';
 import qs from 'qs';
 
-import { BatteryLevel, Lock, LockDetails, LockIdList, LockState, NfcCardList, PasscodeList } from '../types';
+import { BatteryLevel, Lock, LockDetails, LockIdList, LockState, PasscodeList } from '../types/index.js';
 
 class RequestFailed extends Error {
   constructor(message: string) {
@@ -18,8 +18,6 @@ export class TTLockApi {
   public accessToken: string | null = null;
   public refreshToken: string | null = null;
   private tokenMutex = new Mutex();
-  private requestQueue: (() => Promise<void>)[] = [];
-  private isProcessingQueue = false;
 
   constructor(private log: Logging, private clientId: string, private clientSecret: string) {
     this.apiClient = axios.create({
@@ -207,7 +205,6 @@ export class TTLockApi {
     lockState: LockState,
     lockBattery: BatteryLevel,
     lockPasscodes: PasscodeList,
-    lockNfcCards: NfcCardList,
   ): Promise<Lock> {
     this.log.debug(`Mapping lock details to Lock object for lock: ${lockDetails.lockId}`);
     return {
@@ -220,7 +217,6 @@ export class TTLockApi {
       state: lockState.state,
       battery: lockBattery.battery,
       passCodes: lockPasscodes,
-      nfcCards: lockNfcCards,
       offline: false,
       lastSeen: new Date(),
     };
@@ -294,55 +290,5 @@ export class TTLockApi {
       deleteType: 2,
     });
     this.log.debug(`Passcode deleted for lock: ${lockId}`);
-  }
-
-  public async getNfcCards(lockId: string): Promise<NfcCardList> {
-    this.log.debug(`Fetching NFC cards for lock: ${lockId}`);
-    const response = await this.makeAuthenticatedRequest<{
-      list: {
-        cardId: string;
-        lockId: string;
-        cardNumber: string;
-      }[];
-      pageNo: number;
-      pageSize: number;
-      pages: number;
-      total: number;
-    }>('identityCard/list', 'GET', { lockId, pageNo: 1, pageSize: 1000, orderBy: 0 });
-
-    if (!response.list || !Array.isArray(response.list)) {
-      this.log.error('Invalid response format: expected list of NFC cards');
-      throw new Error('Invalid response format: expected list of NFC cards');
-    }
-
-    this.log.debug(`Found ${response.list.length} NFC cards for lock: ${lockId}`);
-    return response.list.map((item) => ({
-      id: item.cardId.toString(),
-      lockId: item.lockId.toString(),
-      number: item.cardNumber,
-    }));
-  }
-
-  public async addNfcCard(lockId: string, cardNumber: string): Promise<{ cardId: string }> {
-    this.log.debug(`Adding NFC card to lock: ${lockId}`);
-    const response = await this.makeAuthenticatedRequest<{ cardId: string }>('identityCard/addForReversedCardNumber', 'POST', {
-      lockId,
-      cardNumber,
-      startDate: 0,
-      endDate: 0,
-      addType: 2,
-    });
-    this.log.debug(`NFC card added to lock: ${lockId}`);
-    return response;
-  }
-
-  public async deleteNfcCard(lockId: string, cardId: string): Promise<void> {
-    this.log.debug(`Deleting NFC card for lock: ${lockId}`);
-    await this.makeAuthenticatedRequest('card/delete', 'POST', {
-      lockId,
-      cardId,
-      deleteType: 2,
-    });
-    this.log.debug(`NFC card deleted for lock: ${lockId}`);
   }
 }

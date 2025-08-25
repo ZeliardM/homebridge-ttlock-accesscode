@@ -8,7 +8,6 @@ export interface Lock {
   state: number;
   battery: number;
   passCodes: Passcode[];
-  nfcCards: NfcCard[];
   offline: boolean;
   lastSeen: Date;
 }
@@ -44,13 +43,5 @@ export interface Passcode {
 }
 
 export type PasscodeList = Passcode[];
-
-export interface NfcCard {
-  id: string;
-  lockId: string;
-  number: string;
-}
-
-export type NfcCardList = NfcCard[];
 
 export type TLV8Configuration = Record<string, Buffer>;

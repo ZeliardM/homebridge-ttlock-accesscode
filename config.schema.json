@@ -1,8 +1,8 @@
 {
-  "pluginAlias": "TTLockHomeKey",
+  "pluginAlias": "TTLockAccessCode",
   "pluginType": "platform",
   "singular": true,
-  "headerDisplay": "TTLock HomeKey Plugin.<p>Most users do not require configuration and can just click \"Save\" to get started. See [README](https://github.com/ZeliardM/homebridge-ttlock-homekey/blob/latest/README.md) for more information.</p>",
+  "headerDisplay": "TTLock Access Code Plugin.<p>Follow the [README](https://github.com/ZeliardM/homebridge-ttlock-accesscode/blob/latest/README.md) for configuration instructions and then click \"Save\" to get started.</p>",
   "footerDisplay": "",
   "schema": {
     "type": "object",
@@ -11,7 +11,7 @@
         "title": "Name",
         "type": "string",
         "required": true,
-        "default": "TTLockHomeKey",
+        "default": "TTLockAccessCode",
         "minLength": 1
       },
       "clientId": {
@@ -42,13 +42,6 @@
         "placeholder": "Password",
         "minLength": 1
       },
-      "color": {
-        "title": "HomeKey Color",
-        "type": "string",
-        "description": "Select the color for the HomeKey in the Wallet App.",
-        "enum": ["Black", "Gold", "Silver", "Tan"],
-        "default": "Tan"
-      },
       "pollingInterval": {
         "title": "Polling Interval (seconds)",
         "type": "integer",
@@ -75,7 +68,6 @@
     "clientSecret",
     "username",
     "password",
-    "color",
     {
       "type": "fieldset",
       "title": "Device Discovery (Optional)",

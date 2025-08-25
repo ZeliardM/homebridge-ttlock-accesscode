@@ -11,7 +11,7 @@ import pkg from 'ber-tlv';
 import { EventEmitter } from 'node:events';
 
 import platformAccessoryInformation from './platformAccessoryInformation.js';
-import { TTLockAccessoryContext, TTLockHomeKeyPlatform } from './platform.js';
+import { TTLockAccessoryContext, TTLockAccessCodePlatform } from './platform.js';
 import { TTLockApi } from './api/ttlockApi.js';
 import { Lock, TLV8Configuration } from './types/index.js';
 
@@ -36,14 +36,6 @@ function getAccessCodeSupportedConfiguration(): string {
   return encodeTLV8(configuration).toString('base64');
 }
 
-function getNFCAccessSupportedConfiguration(): string {
-  const configuration: TLV8Configuration = {
-    '01': Buffer.from([10]),
-    '02': Buffer.from([10]),
-  };
-  return encodeTLV8(configuration).toString('base64');
-}
-
 export class TTLockHomeKitDevice {
   private readonly log: Logging;
   private readonly ttLockApi?: TTLockApi;
@@ -58,7 +50,7 @@ export class TTLockHomeKitDevice {
   public platformAccessory: PlatformAccessory<TTLockAccessoryContext>;
 
   constructor(
-    private readonly platform: TTLockHomeKeyPlatform,
+    private readonly platform: TTLockAccessCodePlatform,
     public lock: Lock,
   ) {
     this.log = this.platform.log;
@@ -91,7 +83,7 @@ export class TTLockHomeKitDevice {
       this.updatePlatformAccessory(platformAccessory);
     }
 
-    const accInfo = platformAccessoryInformation(this.platform.api.hap, this.platform.config.color)(
+    const accInfo = platformAccessoryInformation(this.platform.api.hap)(
       platformAccessory,
       this,
     );
@@ -196,20 +188,6 @@ export class TTLockHomeKitDevice {
           name: this.platform.getCharacteristicName(this.platform.api.hap.Characteristic.ConfigurationState),
         },
       ],
-      NFCAccess: [
-        {
-          type: this.platform.api.hap.Characteristic.NFCAccessSupportedConfiguration,
-          name: this.platform.getCharacteristicName(this.platform.api.hap.Characteristic.NFCAccessSupportedConfiguration),
-        },
-        {
-          type: this.platform.api.hap.Characteristic.NFCAccessControlPoint,
-          name: this.platform.getCharacteristicName(this.platform.api.hap.Characteristic.NFCAccessControlPoint),
-        },
-        {
-          type: this.platform.api.hap.Characteristic.ConfigurationState,
-          name: this.platform.getCharacteristicName(this.platform.api.hap.Characteristic.ConfigurationState),
-        },
-      ],
     } as const;
 
     const serviceName = this.platform.getServiceName(service) as keyof typeof characteristicsMap;
@@ -233,8 +211,6 @@ export class TTLockHomeKitDevice {
       characteristic.onSet(this.handleLockTargetStateOnSet.bind(this, service));
     } else if (characteristicType === this.platform.api.hap.Characteristic.AccessCodeControlPoint) {
       characteristic.onSet(this.handleAccessCodeControlPointOnSet.bind(this));
-    } else if (characteristicType === this.platform.api.hap.Characteristic.NFCAccessControlPoint) {
-      characteristic.onSet(this.handleNFCAccessControlPointOnSet.bind(this));
     }
 
     return characteristic;
@@ -251,8 +227,7 @@ export class TTLockHomeKitDevice {
         return this.getDefaultValue(characteristicType);
       }
       if (
-        characteristicType !== this.platform.api.hap.Characteristic.AccessCodeControlPoint &&
-        characteristicType !== this.platform.api.hap.Characteristic.NFCAccessControlPoint
+        characteristicType !== this.platform.api.hap.Characteristic.AccessCodeControlPoint
       ) {
         let value = service.getCharacteristic(characteristicType).value as CharacteristicValue | undefined;
         if (!value) {
@@ -287,8 +262,6 @@ export class TTLockHomeKitDevice {
           : this.platform.api.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
       case this.platform.api.hap.Characteristic.AccessCodeSupportedConfiguration:
         return this.handleAccessCodeSupportedConfigurationOnGet(service);
-      case this.platform.api.hap.Characteristic.NFCAccessSupportedConfiguration:
-        return this.handleNFCAccessSupportedConfigurationOnGet(service);
       case this.platform.api.hap.Characteristic.ConfigurationState:
         return this.handleConfigurationStateOnGet(service);
       default:
@@ -309,10 +282,7 @@ export class TTLockHomeKitDevice {
         return hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_NORMAL;
       case hap.Characteristic.AccessCodeSupportedConfiguration:
         return 'AQEBAgEGAwEJBAEK';
-      case hap.Characteristic.NFCAccessSupportedConfiguration:
-        return 'AQEKAgEK';
       case hap.Characteristic.AccessCodeControlPoint:
-      case hap.Characteristic.NFCAccessControlPoint:
         return '';
       case hap.Characteristic.ConfigurationState:
         return 1;
@@ -328,17 +298,6 @@ export class TTLockHomeKitDevice {
       .updateValue(value);
     return (
       service.getCharacteristic(this.platform.api.hap.Characteristic.AccessCodeSupportedConfiguration).value ??
-      value
-    );
-  }
-
-  private handleNFCAccessSupportedConfigurationOnGet(service: Service): CharacteristicValue {
-    const value = getNFCAccessSupportedConfiguration();
-    service
-      .getCharacteristic(this.platform.api.hap.Characteristic.NFCAccessSupportedConfiguration)
-      .updateValue(value);
-    return (
-      service.getCharacteristic(this.platform.api.hap.Characteristic.NFCAccessSupportedConfiguration).value ??
       value
     );
   }
@@ -521,11 +480,6 @@ export class TTLockHomeKitDevice {
       this.isUpdating = false;
       this.updateEmitter.emit('updateComplete');
     }
-  }
-
-  private async handleNFCAccessControlPointOnSet(value: CharacteristicValue): Promise<string> {
-    this.log.debug(`NFC Access request for ${this.name}: ${value}`);
-    return '';
   }
 
   protected async updateState(): Promise<void> {
