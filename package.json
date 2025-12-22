@@ -13,21 +13,32 @@
     "url": "https://github.com/ZeliardM/homebridge-ttlock-accesscode/issues"
   },
   "engines": {
-    "homebridge": "^1.11 || ^2.0",
+    "homebridge": "^1.11.0 || ^2.0.0-beta.0",
     "node": "^20 || ^22 || ^24"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "main": "dist/index.js",
   "scripts": {
-    "build": "npm ci && rimraf -I ./dist && npm run lint && tsc",
+    "build": "npm ci && rimraf -I ./dist && tsc",
     "lint": "eslint src/**/*.ts --max-warnings=0",
     "prepublishOnly": "npm run lint && npm run build",
+    "test": "echo \"No test specified\" && exit 0",
     "watch": "npm run build && npm link && nodemon"
   },
   "keywords": [
     "access code",
     "accesscode",
+    "homebridge",
     "homebridge-plugin",
+    "homebridge-ttlock",
+    "homebridge-ttlock-accesscode",
     "ttlock",
+    "ttlock-accesscode",
+    "smarthome",
+    "smart home",
+    "smart lock",
     "smart-lock"
   ],
   "files": [
@@ -35,6 +46,22 @@
     "dist",
     "LICENSE"
   ],
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.3",
+    "@eslint/js": "^9.39.2",
+    "@stylistic/eslint-plugin": "^5.6.1",
+    "@types/node": "^25.0.3",
+    "@types/qs": "^6.14.0",
+    "@typescript-eslint/parser": "^8.50.1",
+    "eslint": "^9.39.2",
+    "globals": "^16.5.0",
+    "homebridge": "^2.0.0-beta.66",
+    "node-persist": "^4.0.4",
+    "nodemon": "^3.1.11",
+    "rimraf": "^6.1.2",
+    "ts-node": "^10.9.2",
+    "typescript-eslint": "^8.50.1"
+  },
   "homepage": "https://github.com/ZeliardM/homebridge-ttlock-accesscode#readme",
   "funding": [
     {
@@ -48,26 +75,11 @@
   ],
   "dependencies": {
     "async-mutex": "^0.5.0",
-    "axios": "^1.11.0",
+    "axios": "^1.13.2",
     "ber-tlv": "^0.9.2",
     "qs": "^6.14.0"
   },
-  "devDependencies": {
-    "@eslint/eslintrc": "^3.3.1",
-    "@eslint/js": "^9.34.0",
-    "@stylistic/eslint-plugin": "^5.2.3",
-    "@types/node": "^24.3.0",
-    "@types/qs": "^6.14.0",
-    "@typescript-eslint/parser": "^8.40.0",
-    "eslint": "^9.34.0",
-    "globals": "^16.3.0",
-    "homebridge": "^2.0.0-beta.29",
-    "node-persist": "^4.0.4",
-    "nodemon": "^3.1.10",
-    "rimraf": "^6.0.1",
-    "ts-node": "^10.9.2",
-    "typescript-eslint": "^8.40.0"
-  },
+  
   "overrides": {
     "node-persist": "^4.0.4"
   }

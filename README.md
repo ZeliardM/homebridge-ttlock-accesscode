@@ -11,11 +11,11 @@
 </span>
 
 <p align="center">
-  <a href="https://github.com/ZeliardM/homebridge-ttlock-accesscode/blob/latest/LICENSE"><img src="https://badgen.net/npm/license/homebridge-ttlock-accesscode" alt="mit license"></a>
-  <a href="https://www.npmjs.com/package/homebridge-ttlock-accesscode/v/latest"><img src="https://badgen.net/npm/v/homebridge-ttlock-accesscode/latest?label=npm@latest" alt="latest npm version"></a>
-  <a href="https://www.npmjs.com/package/homebridge-ttlock-accesscode/v/latest"><img src="https://badgen.net/npm/dt/homebridge-ttlock-accesscode" alt="npm downloads total"></a>
-  <a href="https://www.paypal.me/ZeliardM/USD/"><img src="https://badgen.net/badge/donate/paypal?color=orange" alt="donate"></a>
-  <a href="https://github.com/sponsors/ZeliardM"><img src="https://badgen.net/badge/donate/github?color=orange" alt="donate"></a>
+  <a href="https://github.com/ZeliardM/homebridge-ttlock-accesscode/blob/latest/LICENSE"><img src="https://img.shields.io/npm/l/homebridge-ttlock-accesscode?color=yellow" alt="mit license"></a>
+  <a href="https://www.npmjs.com/package/homebridge-ttlock-accesscode/v/latest"><img src="https://img.shields.io/npm/v/homebridge-ttlock-accesscode/latest?label=npm%40latest&color=blue" alt="latest npm version"></a>
+  <a href="https://www.npmjs.com/package/homebridge-ttlock-accesscode/v/latest"><img src="https://img.shields.io/npm/dt/homebridge-ttlock-accesscode?color=brightgreen" alt="npm downloads total"></a>
+  <a href="https://www.paypal.me/ZeliardM/USD/"><img src="https://img.shields.io/badge/donate-paypal-orange" alt="donate"></a>
+  <a href="https://github.com/sponsors/ZeliardM"><img src="https://img.shields.io/badge/donate-github-orange" alt="donate"></a>
 </p>
 
 <div align="center">
