@@ -1,0 +1,31 @@
+name: Sticky Comment
+description: Upsert a sticky comment identified by a marker on issues/PRs
+inputs:
+  number:
+    description: Issue or PR number
+    required: true
+  marker:
+    description: Marker string present in the sticky comment body
+    required: true
+  body_file:
+    description: Path to a file containing the comment body
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Sticky Comment
+      id: sticky
+      shell: bash
+      env:
+        NUMBER: ${{ inputs.number }}
+        MARK: ${{ inputs.marker }}
+      run: |
+        set -euo pipefail
+        CID="$(gh api repos/"$GITHUB_REPOSITORY"/issues/"$NUMBER"/comments --paginate \
+          --jq '.[] | select(.body | contains(env.MARK)) | .id' | head -n1 || true)"
+        BODY="$(cat "${{ inputs.body_file }}")"
+        if [ -n "$CID" ]; then
+          gh api repos/"$GITHUB_REPOSITORY"/issues/comments/"$CID" -X PATCH -f body="$BODY"
+        else
+          gh issue comment "$NUMBER" --body-file "${{ inputs.body_file }}"
+        fi

@@ -1,0 +1,91 @@
+---
+name: Build, Lint, and Test
+
+on:
+  workflow_call: {}
+
+concurrency:
+  group: build-lint-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_lint_test:
+    name: Build, Lint, and Test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ${{ fromJson('["20","22","24"]') }}
+    steps:
+      - name: Checkout Actions
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node ${{ matrix.node-version }}
+        id: setup-node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Setup Python 3.13
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Update npm
+        id: update-npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g npm@latest
+
+      - name: Install Node Dependencies
+        id: install-node-deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Lint
+        id: lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run lint
+
+      - name: Build
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+
+      - name: Node Import Test
+        id: node-import-test
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          (async () => {
+            try {
+              await import('./dist/index.js');
+              console.log('Node Import OK');
+            } catch (e) {
+              console.error(e);
+              process.exit(1);
+            }
+          })();
+          NODE
+
+      - name: Outdated / Audit
+        id: outdated-audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm list --outdated || true
+          npm audit || true

@@ -1,0 +1,198 @@
+---
+name: Dependabot Auto-Merge
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  GITHUB_REPOSITORY: ${{ github.repository }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  PULL_REQUEST_AUTHOR: ${{ github.event.pull_request.user.login }}
+  PULL_REQUEST_BRANCH: ${{ github.event.pull_request.base.ref }}
+  PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+  PULL_REQUEST_TITLE: ${{ github.event.pull_request.title }}
+  PULL_REQUEST_URL: ${{ github.event.pull_request.html_url }}
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    name: Auto-Merge Dependabot Pull Request
+    runs-on: ubuntu-latest
+    outputs:
+      is_merged: ${{ steps.merge_output.outputs.is_merged }}
+    steps:
+      - name: Checkout Actions
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Ensure jq
+        id: ensure-jq
+        uses: ./.github/actions/ensure-jq
+
+      - name: Determine Safety from Labels
+        id: safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          LABELS="$(gh api repos/"$GITHUB_REPOSITORY"/issues/"$PULL_REQUEST_NUMBER"/labels --jq '.[].name' || true)"
+          block=true
+          if ! printf '%s\n' "$LABELS" | grep -qi '^dependency-major$'; then
+            block=false
+          fi
+          echo "block=$block" >> "$GITHUB_OUTPUT"
+
+      - name: Build Sticky Comment
+        id: build_sticky
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.safety.outputs.block }}" = "false" ]; then
+            {
+              echo "✅ Dependabot Update is Safe and will be Auto-Merged."
+              echo
+              echo "<!-- COPILOT-STICKY:DEPENDABOT -->"
+            } > body.txt
+          else
+            {
+              echo "⚠️ Dependabot Update Requires Manual Review."
+              echo
+              echo "<!-- COPILOT-STICKY:DEPENDABOT -->"
+            } > body.txt
+          fi
+
+      - name: Upsert Sticky Comment
+        id: upsert_sticky
+        uses: ./.github/actions/sticky-comment
+        with:
+          number: ${{ env.PULL_REQUEST_NUMBER }}
+          marker: "<!-- COPILOT-STICKY:DEPENDABOT -->"
+          body_file: body.txt
+
+      - name: Auto-Merge Pull Request
+        id: auto_merge
+        if: steps.safety.outcome == 'success' && steps.safety.outputs.block == 'false'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh pr merge --auto --squash "$PULL_REQUEST_URL"
+
+      - name: Set Merge Result Output
+        id: merge_output
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.auto_merge.outcome }}" = "success" ]; then
+            echo "is_merged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_merged=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  post-merge-release:
+    name: Update CHANGELOG.md and Release from Dependabot Merge
+    runs-on: ubuntu-latest
+    needs: auto-merge
+    if: needs.auto-merge.outputs.is_merged == 'true'
+    steps:
+      - name: Checkout Actions
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 24
+        id: setup-node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Update npm
+        id: update-npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g npm@latest
+
+      - name: Setup Python 3.13
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Ensure jq
+        id: ensure-jq
+        uses: ./.github/actions/ensure-jq
+
+      - name: Fetch current labels for Pull Request
+        id: fetch-labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          labels_json="$(gh api repos/"$GITHUB_REPOSITORY"/issues/"$PULL_REQUEST_NUMBER"/labels --jq '.[].name' | jq -R . | jq -s .)"
+          {
+            echo 'labels<<EOF'
+            echo "$labels_json"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Serialize Labels
+        id: labels
+        uses: ./.github/actions/serialize-labels
+        with:
+          labels_json: ${{ steps.fetch-labels.outputs.labels }}
+
+      - name: Sync Local beta, Update CHANGELOG.md, and Create/Update Release
+        id: sync-update-release
+        shell: bash
+        env:
+          MODE: pr-merge
+          PULL_REQUEST_LABELS: ${{ steps.labels.outputs.path }}
+        run: |
+          set -euo pipefail
+          MAX_ATTEMPTS=${MAX_ATTEMPTS:-5}
+          BASE_SLEEP=${BASE_SLEEP:-5}
+          JITTER=${JITTER:-10}
+          attempt=1
+          echo "::notice::Starting sync+release_manager loop (max ${MAX_ATTEMPTS} attempts)"
+          while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+            echo "::notice::Attempt ${attempt} of ${MAX_ATTEMPTS}"
+            echo "::notice::Syncing local beta -> origin/beta"
+            git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            if ! git fetch origin beta --depth=1; then
+              echo "::warning::git fetch failed on attempt ${attempt}"
+              FETCH_OK=false
+            else
+              FETCH_OK=true
+            fi
+            if [ "$FETCH_OK" = "true" ]; then
+              git checkout -B beta origin/beta || true
+              git reset --hard origin/beta || true
+              git clean -fd || true
+            fi
+            echo "::notice::Running release_manager.py (MODE=${MODE})"
+            if python .github/scripts/release_manager.py; then
+              echo "::notice::release_manager.py succeeded on attempt ${attempt}"
+              exit 0
+            else
+              echo "::warning::release_manager.py failed on attempt ${attempt}"
+            fi
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              sleep_sec=$(( BASE_SLEEP * attempt + (RANDOM % JITTER) ))
+              echo "::notice::Retrying in ${sleep_sec}s (including jitter) ..."
+              sleep "${sleep_sec}"
+            fi
+            attempt=$(( attempt + 1 ))
+          done
+          echo "::error::All ${MAX_ATTEMPTS} attempts to sync+update CHANGELOG failed. Manual intervention required."
+          exit 1

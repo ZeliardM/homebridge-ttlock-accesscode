@@ -1,0 +1,21 @@
+# Default owner for everything
+*                                    @ZeliardM
+
+# Core source and configuration
+/src/                                @ZeliardM
+/config.schema.json                  @ZeliardM
+/package.json                        @ZeliardM
+/CHANGELOG.md                        @ZeliardM
+/README.md                           @ZeliardM
+/CONTRIBUTING.md                     @ZeliardM
+
+# GitHub configuration and automation
+/.github/acions/                     @ZeliardM
+/.github/ISSUE_TEMPLATE/             @ZeliardM
+/.github/scripts/                    @ZeliardM
+/.github/workflows/                  @ZeliardM
+/.github/CODEOWNERS                  @ZeliardM
+/.github/dependabot.yml              @ZeliardM
+/.github/labeler.yml                 @ZeliardM
+/.github/labels-reference.md         @ZeliardM
+/.github/pull_request_template.md    @ZeliardM

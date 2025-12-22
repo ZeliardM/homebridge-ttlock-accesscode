@@ -1,0 +1,18 @@
+name: Clear Labels
+description: Replace labels on an issue or PR with an empty set
+inputs:
+  number:
+    description: Issue or PR number
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Clear Labels
+      id: clear
+      shell: bash
+      env:
+        NUMBER: ${{ inputs.number }}
+      run: |
+        set -euo pipefail
+        printf '{"labels":[]}\n' > payload.json
+        gh api --method PUT -H "Accept: application/vnd.github+json" repos/"$GITHUB_REPOSITORY"/issues/"$NUMBER"/labels --input payload.json

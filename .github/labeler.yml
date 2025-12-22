@@ -1,0 +1,51 @@
+docs:
+  - changed-files:
+    - any-glob-to-any-file: '**/*.md'
+
+branding:
+  - changed-files:
+    - any-glob-to-any-file: branding/**
+
+enhancement:
+  - any:
+    - changed-files:
+      - any-glob-to-any-file: 'src/**/*'
+      - any-glob-to-any-file: 'config.schema.json'
+    - head-branch:
+      - '^feature/.*'
+      - '^feat/.*'
+
+dependency:
+  - any:
+    - changed-files:
+      - any-glob-to-any-file: 'package.json'
+      - any-glob-to-any-file: 'package-lock.json'
+
+workflow:
+  - changed-files:
+    - any-glob-to-any-file: '.github/**'
+
+fix:
+  - any:
+    - head-branch:
+      - '^fix/.*'
+      - '^hotfix/.*'
+      - '.*/fix-.*'
+
+bug:
+  - any:
+    - head-branch:
+      - '^bug/.*'
+      - '.*/bug-.*'
+
+breaking-change:
+  - head-branch:
+    - '.*[bB]reaking.*'
+
+beta:
+  - base-branch:
+    - 'beta'
+
+latest:
+  - base-branch:
+    - 'latest'
