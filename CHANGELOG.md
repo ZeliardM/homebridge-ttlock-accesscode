@@ -1,13 +1,18 @@
 # Changelog
 
-## [v2.0.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.0)
+## [v2.0.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.0) (2025-12-31)
 
 ### Breaking Changes
 
 - [breaking] Complete re-write for better device handling [0abe52f](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0abe52f5ec1d50006242eddd6d22d9a486ab8eeb) (@ZeliardM)
 
+### Bug Fixes
+
+- [bug] Fix Build, Lint, Test Workflow [d092d50](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/d092d502e0a0130ad992bf1eff82ab2a49838336) (@ZeliardM)
+
 ### Other Changes
 
+- Update CHANGELOG.md for beta release v2.0.0-beta.0 [beta-release] (@github-actions)
 - Finish updating dependencies and update tsconfig.json [0933ce9](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0933ce9ed9c5c5040145ba568db1cc2006b0e15c) (@ZeliardM)
 - Finish upating dependencies and update tsconfig.json [5935aa6](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/5935aa6ba72db83c9e8c5924496e83c6f9377b1e) (@ZeliardM)
 - Update GitHub Automations [0c78768](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0c7876832a9b9077c5a2b3d93de758c150a51f3d) (@ZeliardM)
