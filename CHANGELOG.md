@@ -1,4 +1,11 @@
 # Changelog
+## [v2.0.0-beta.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.1)
+
+### Bug Fixes
+
+- [bug] Fix CodeQL Workflow [dc72451](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/dc7245106265aa012d5bf4812768ee87156d0151) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.0-beta.0...v2.0.0-beta.1
 
 ## [v2.0.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.0) (2025-12-31)
 
