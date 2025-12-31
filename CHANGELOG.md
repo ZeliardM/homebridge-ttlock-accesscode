@@ -6,6 +6,10 @@
 
 - [breaking] Complete re-write for better device handling [0abe52f](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0abe52f5ec1d50006242eddd6d22d9a486ab8eeb) (@ZeliardM)
 
+### Bug Fixes
+
+- [bug] Fix Build, Lint, Test Workflow [d092d50](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/d092d502e0a0130ad992bf1eff82ab2a49838336) (@ZeliardM)
+
 ### Other Changes
 
 - Finish updating dependencies and update tsconfig.json [0933ce9](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0933ce9ed9c5c5040145ba568db1cc2006b0e15c) (@ZeliardM)
