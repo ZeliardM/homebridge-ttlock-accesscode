@@ -14,11 +14,11 @@
       "clientSecret": "YourClientSecret",
       "username": "YourUsername",
       "password": "YourPassword",
-      "discoveryOptions": {
-        "pollingInterval": 5,
-        "discoveryPollingInterval": 300,
-        "offlineInterval": 7
-      }
+      "totalApiCallsPerMonth": 100000,
+      "pollingInterval": 90,
+      "discoveryPollingInterval": 6,
+      "offlineInterval": 7,
+      "waitTimeUpdate": 100
     }
   ],
   "accessories": []

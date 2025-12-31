@@ -17,6 +17,7 @@
       "clientId": {
         "title": "Client ID",
         "type": "string",
+        "required": true,
         "description": "Client ID for TTLock Cloud API.",
         "placeholder": "Client ID",
         "minLength": 1
@@ -24,6 +25,7 @@
       "clientSecret": {
         "title": "Client Secret",
         "type": "string",
+        "required": true,
         "description": "Client Secret for TTLock Cloud API.",
         "placeholder": "Client Secret",
         "minLength": 1
@@ -31,6 +33,7 @@
       "username": {
         "title": "Username",
         "type": "string",
+        "required": true,
         "description": "Username for TTLock App Account.",
         "placeholder": "Username",
         "minLength": 1
@@ -38,27 +41,41 @@
       "password": {
         "title": "Password",
         "type": "string",
+        "required": true,
         "description": "Password for TTLock App Account.",
         "placeholder": "Password",
         "minLength": 1
+      },
+      "totalApiCallsPerMonth": {
+        "title": "Total API Calls Per Month",
+        "type": "integer",
+        "description": "Total number of TTLock API calls allowed per month (used to automatically adjust polling).",
+        "default": 100000,
+        "minimum": 100000
       },
       "pollingInterval": {
         "title": "Polling Interval (seconds)",
         "type": "integer",
         "description": "How often to check device status in the background (seconds)",
-        "default": 5
+        "default": 90
       },
       "discoveryPollingInterval": {
-        "title": "Discovery Polling Interval (seconds)",
+        "title": "Discovery Polling Interval (hours)",
         "type": "integer",
-        "description": "How often to discover new devices in the background (seconds)",
-        "default": 300
+        "description": "How often to discover new devices in the background (hours)",
+        "default": 6
       },
       "offlineInterval": {
         "title": "Offline Interval (days)",
         "type": "integer",
         "description": "How often to remove offline devices in the background (days)",
         "default": 7
+      },
+      "waitTimeUpdate": {
+        "title": "Wait Time Update (milliseconds)",
+        "type": "integer",
+        "description": "The time to wait to combine similar commands for a device before sending a command to a device (milliseconds). Default: 100.",
+        "default": 100
       }
     }
   },
@@ -68,6 +85,7 @@
     "clientSecret",
     "username",
     "password",
+    "totalApiCallsPerMonth",
     {
       "type": "fieldset",
       "title": "Device Discovery (Optional)",
@@ -77,6 +95,15 @@
         "pollingInterval",
         "discoveryPollingInterval",
         "offlineInterval"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Advanced Settings (Optional)",
+      "description": "Don't change these, unless you understand what you're doing.",
+      "expandable": true,
+      "items": [
+        "waitTimeUpdate"
       ]
     }
   ]

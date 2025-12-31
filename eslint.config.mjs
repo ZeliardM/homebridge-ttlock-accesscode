@@ -68,6 +68,5 @@ export default [{
         requireLast: false,
       },
     }],
-    'linebreak-style': ['error', 'windows'],
   },
 }];

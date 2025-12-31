@@ -5,8 +5,12 @@ import type {
   Logging,
 } from 'homebridge';
 
+import path from 'node:path';
+import { promises as fs } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 export function deferAndCombine<T, U>(
-  fn: (args: U[]) => Promise<T>,
+  fn: ((requestCount: number) => Promise<T>) | (() => Promise<T>),
   timeout: number,
   runNowFn?: (arg: U) => void,
 ): (arg?: U) => Promise<T> {
@@ -16,10 +20,18 @@ export function deferAndCombine<T, U>(
   const processRequests = () => {
     const currentRequests = requests;
     requests = [];
-    fn(currentRequests.map(req => req.resolve as unknown as U))
+    let result: Promise<T>;
+    if (fn.length === 0) {
+      result = (fn as () => Promise<T>)();
+    } else {
+      result = (fn as (requestCount: number) => Promise<T>)(currentRequests.length);
+    }
+    result
       .then(value => currentRequests.forEach(req => req.resolve(value)))
       .catch(error => currentRequests.forEach(req => req.reject(error)))
-      .finally(() => timer = null);
+      .finally(() => {
+        timer = null;
+      });
   };
 
   return (arg?: U) => {
@@ -41,18 +53,32 @@ export function isObjectLike(candidate: unknown): candidate is Record<string, un
   return typeof candidate === 'object' && candidate !== null || typeof candidate === 'function';
 }
 
+export async function loadPackageConfig(logger: Logging): Promise<{ name: string; version: string; engines: { node: string } }> {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const packageConfigPath = path.join(__dirname, '..', 'package.json');
+  const log: Logger = prefixLogger(logger, '[Package Config]');
+  log.debug('Loading package configuration from:', packageConfigPath);
+
+  try {
+    const packageConfigData = await fs.readFile(packageConfigPath, 'utf8');
+    return JSON.parse(packageConfigData);
+  } catch (error) {
+    log.error(`Error reading package.json: ${error}`);
+    throw error;
+  }
+}
+
 export function lookup<T>(
   object: unknown,
   compareFn: undefined | ((objectProp: unknown, search: T) => boolean),
   value: T,
-): string {
+): string | undefined {
   const compare = compareFn ?? ((objectProp: unknown, search: T): boolean => objectProp === search);
 
   if (isObjectLike(object)) {
-    const key = Object.keys(object).find(key => compare(object[key], value));
-    return key ?? ''; // Provide a default value if key is undefined
+    return Object.keys(object).find(key => compare(object[key], value));
   }
-  return '';
+  return undefined;
 }
 
 export function lookupCharacteristicNameByUUID(
@@ -81,4 +107,27 @@ export function prefixLogger(logger: Logger, prefix: string | (() => string)): L
   (clonedLogger as { prefix: string | (() => string) }).prefix = typeof logger.prefix === 'string' ? `${prefix} ${logger.prefix}` : prefix;
 
   return clonedLogger;
+}
+
+export function satisfiesVersion(currentVersion: string, requiredVersion: string): boolean {
+  const versions = requiredVersion.split('||').map(v => v.trim());
+
+  return versions.some(version => {
+    const [requiredMajor, requiredMinor, requiredPatch] = version.replace('^', '').split('.').map(Number);
+    const [currentMajor, currentMinor, currentPatch] = currentVersion.replace('v', '').split('.').map(Number);
+
+    if (currentMajor > requiredMajor) {
+      return true;
+    }
+    if (currentMajor < requiredMajor) {
+      return false;
+    }
+    if (currentMinor > requiredMinor) {
+      return true;
+    }
+    if (currentMinor < requiredMinor) {
+      return false;
+    }
+    return currentPatch >= requiredPatch;
+  });
 }

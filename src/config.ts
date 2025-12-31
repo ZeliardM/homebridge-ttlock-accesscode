@@ -37,9 +37,11 @@ export interface TTLockAccessCodeConfigInput {
   clientSecret?: string;
   username?: string;
   password?: string;
+  totalApiCallsPerMonth?: number;
   pollingInterval?: number;
   discoveryPollingInterval?: number;
   offlineInterval?: number;
+  waitTimeUpdate?: number;
 }
 
 export type TTLockAccessCodeConfig = {
@@ -48,10 +50,14 @@ export type TTLockAccessCodeConfig = {
   clientSecret: string;
   username: string;
   password: string;
+  totalApiCallsPerMonth: number;
   discoveryOptions: {
     pollingInterval: number;
     discoveryPollingInterval: number;
     offlineInterval: number;
+  };
+  advancedOptions: {
+    waitTimeUpdate: number;
   };
 };
 
@@ -61,10 +67,14 @@ export const defaultConfig: TTLockAccessCodeConfig = {
   clientSecret: '',
   username: '',
   password: '',
+  totalApiCallsPerMonth: 100000,
   discoveryOptions: {
-    pollingInterval: 5,
-    discoveryPollingInterval: 300,
+    pollingInterval: 90,
+    discoveryPollingInterval: 6,
     offlineInterval: 7,
+  },
+  advancedOptions: {
+    waitTimeUpdate: 100,
   },
 };
 
@@ -76,9 +86,11 @@ function validateConfig(config: Record<string, unknown>): string[] {
   validateType(config, 'clientSecret', 'string', errors);
   validateType(config, 'username', 'string', errors);
   validateType(config, 'password', 'string', errors);
+  validateType(config, 'totalApiCallsPerMonth', 'number', errors);
   validateType(config, 'pollingInterval', 'number', errors);
   validateType(config, 'discoveryPollingInterval', 'number', errors);
   validateType(config, 'offlineInterval', 'number', errors);
+  validateType(config, 'waitTimeUpdate', 'number', errors);
 
   return errors;
 }
@@ -104,18 +116,26 @@ export function parseConfig(config: Record<string, unknown>): TTLockAccessCodeCo
     throw new ConfigParseError('Error parsing config');
   }
 
-  const c = { ...defaultConfig, ...config } as TTLockAccessCodeConfigInput;
+  const parsedConfig = { ...defaultConfig, ...config } as TTLockAccessCodeConfigInput;
 
   return {
-    name: c.name ?? defaultConfig.name,
-    clientId: c.clientId ?? defaultConfig.clientId,
-    clientSecret: c.clientSecret ?? defaultConfig.clientSecret,
-    username: c.username ?? defaultConfig.username,
-    password: c.password ?? defaultConfig.password,
+    name: parsedConfig.name ?? defaultConfig.name,
+    clientId: parsedConfig.clientId ?? defaultConfig.clientId,
+    clientSecret: parsedConfig.clientSecret ?? defaultConfig.clientSecret,
+    username: parsedConfig.username ?? defaultConfig.username,
+    password: parsedConfig.password ?? defaultConfig.password,
+    totalApiCallsPerMonth: parsedConfig.totalApiCallsPerMonth ?? defaultConfig.totalApiCallsPerMonth,
     discoveryOptions: {
-      pollingInterval: (c.pollingInterval ?? defaultConfig.discoveryOptions.pollingInterval) * 1000,
-      discoveryPollingInterval: (c.discoveryPollingInterval ?? defaultConfig.discoveryOptions.discoveryPollingInterval) * 1000,
-      offlineInterval: (c.offlineInterval ?? defaultConfig.discoveryOptions.offlineInterval) * 24 * 60 * 60 * 1000,
+      pollingInterval: (parsedConfig.pollingInterval ?? defaultConfig.discoveryOptions.pollingInterval) * 1000,
+      discoveryPollingInterval: (
+        (parsedConfig.discoveryPollingInterval ??
+          defaultConfig.discoveryOptions.discoveryPollingInterval)
+        * 60 * 60 * 1000
+      ),
+      offlineInterval: (parsedConfig.offlineInterval ?? defaultConfig.discoveryOptions.offlineInterval) * 24 * 60 * 60 * 1000,
+    },
+    advancedOptions: {
+      waitTimeUpdate: parsedConfig.waitTimeUpdate ?? defaultConfig.advancedOptions.waitTimeUpdate,
     },
   };
 }
