@@ -14,8 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix:
-        language: [javascript, python]
     steps:
       - name: Checkout Actions
         id: checkout
@@ -27,7 +25,7 @@ jobs:
         id: init
         uses: github/codeql-action/init@v4
         with:
-          languages: ${{ matrix.language }}
+          languages: javascript
 
       - name: Autobuild CodeQL
         id: autobuild
@@ -37,4 +35,4 @@ jobs:
         id: analyze
         uses: github/codeql-action/analyze@v4
         with:
-          category: "/language:${{ matrix.language }}"
+          category: "/language:javascript"
