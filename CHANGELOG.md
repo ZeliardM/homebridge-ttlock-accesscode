@@ -1,6 +1,10 @@
 # Changelog
 
-## [v1.0.2-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v1.0.2-beta.0)
+## [v2.0.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.0)
+
+### Breaking Changes
+
+- [breaking] Complete re-write for better device handling [0abe52f](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0abe52f5ec1d50006242eddd6d22d9a486ab8eeb) (@ZeliardM)
 
 ### Other Changes
 
@@ -12,7 +16,7 @@
 - npm(deps-dev): bump typescript-eslint from 8.40.0 to 8.51.0 [#10](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/10) (@dependabot[bot])
 - npm(deps-dev): bump homebridge from 2.0.0-beta.29 to 2.0.0-beta.68 [#9](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/9) (@dependabot[bot])
 
-**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v1.0.1...v1.0.2-beta.0
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v1.0.1...v2.0.0-beta.0
 
 ## [v1.0.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v1.0.1)
 
