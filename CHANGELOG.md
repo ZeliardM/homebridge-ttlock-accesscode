@@ -1,4 +1,12 @@
 # Changelog
+## [v2.0.0-beta.2](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.2)
+
+### Bug Fixes
+
+- [bug] Fix version check and manual commit handling [1b70fae](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/1b70faed4011611680ed4b225d287959b6bc978c) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.0-beta.1...v2.0.0-beta.2
+
 ## [v2.0.0-beta.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.1) (2025-12-31)
 
 ### Bug Fixes
