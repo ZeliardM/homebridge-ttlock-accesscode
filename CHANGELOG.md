@@ -1,4 +1,12 @@
 # Changelog
+## [v2.0.0-beta.3](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.3)
+
+### Other Changes
+
+- [other] Dependency clean-up [0439186](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0439186d92ec49c4fb601e727c808b0f67519d07) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.0-beta.2...v2.0.0-beta.3
+
 ## [v2.0.0-beta.2](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.2) (2026-01-01)
 
 ### Bug Fixes
