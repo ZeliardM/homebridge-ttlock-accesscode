@@ -11,8 +11,8 @@ import type {
 
 import { EventEmitter } from 'node:events';
 
-import create from './devices/create.js';
 import HomeKitDevice from './devices/baseDevice.js';
+import create from './devices/create.js';
 import DeviceManager from './devices/deviceManager.js';
 import { parseConfig } from './config.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
