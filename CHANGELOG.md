@@ -4,6 +4,7 @@
 ### Other Changes
 
 - [other] Dependency clean-up [0439186](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0439186d92ec49c4fb601e727c808b0f67519d07) (@ZeliardM)
+- Bump qs from 6.14.0 to 6.14.1 in the npm_and_yarn group across 1 directory [#12](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/12) (@dependabot[bot])
 
 **Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.0-beta.2...v2.0.0-beta.3
 
