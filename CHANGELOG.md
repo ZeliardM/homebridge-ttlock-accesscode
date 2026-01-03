@@ -1,6 +1,10 @@
 # Changelog
 ## [v2.0.0-beta.3](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.3)
 
+### Bug Fixes
+
+- [bug] Fix dependabot-auto-merge from latest to beta [86abcb3](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/86abcb3366212f6ada2c891f0b7649e99c9d3669) (@ZeliardM)
+
 ### Other Changes
 
 - [other] Dependency clean-up [0439186](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0439186d92ec49c4fb601e727c808b0f67519d07) (@ZeliardM)
