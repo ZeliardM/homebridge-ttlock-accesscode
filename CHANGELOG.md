@@ -1,4 +1,12 @@
 # Changelog
+## [v2.0.0-beta.4](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.4)
+
+### Bug Fixes
+
+- [bug] Delete old release draft on escalated migration [4a20948](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/4a2094887aa744694bd5098caf86f81af4c59c6c) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.0-beta.3...v2.0.0-beta.4
+
 ## [v2.0.0-beta.3](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.3) (2026-01-03)
 
 ### Featured Changes
