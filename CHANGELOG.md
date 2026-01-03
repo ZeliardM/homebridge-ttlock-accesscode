@@ -1,5 +1,5 @@
 # Changelog
-## [v2.0.0-beta.3](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.3)
+## [v2.0.0-beta.3](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.3) (2026-01-03)
 
 ### Featured Changes
 
@@ -11,6 +11,7 @@
 
 ### Other Changes
 
+- Update CHANGELOG.md for beta release v2.0.0-beta.3 [beta-release] (@github-actions)
 - [other] Dependency clean-up [0439186](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0439186d92ec49c4fb601e727c808b0f67519d07) (@ZeliardM)
 - Bump qs from 6.14.0 to 6.14.1 in the npm_and_yarn group across 1 directory [#12](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/12) (@dependabot[bot])
 
