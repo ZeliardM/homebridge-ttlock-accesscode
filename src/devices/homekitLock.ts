@@ -5,12 +5,12 @@ import pkg from 'ber-tlv';
 
 import HomeKitDevice from './baseDevice.js';
 import {
-  buildLockDescriptors,
-  buildBatteryDescriptors,
   buildAccessCodeDescriptors,
+  buildBatteryDescriptors,
+  buildLockDescriptors,
 } from './descriptorHelpers.js';
 import type TTLockAccessCodePlatform from '../platform.js';
-import type { Lock, CharacteristicDescriptor, Passcode, SysInfo } from './deviceTypes.js';
+import type { CharacteristicDescriptor, Lock, Passcode, SysInfo } from './deviceTypes.js';
 
 const { TlvFactory } = pkg;
 

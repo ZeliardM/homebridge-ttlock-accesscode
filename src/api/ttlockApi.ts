@@ -2,12 +2,11 @@ import type { Logging } from 'homebridge';
 
 import axios from 'axios';
 import crypto from 'crypto';
-import qs from 'qs';
-import { Mutex } from 'async-mutex';
 import { AxiosInstance } from 'axios';
 import type { AxiosResponse } from 'axios';
 
 import { UsageTracker } from './usageTracker.js';
+import { SimpleMutex } from '../utils.js';
 import { FeatureInfo, Passcode, SysInfo, TTLockDevice } from '../devices/deviceTypes.js';
 
 class RequestFailed extends Error {
@@ -21,7 +20,7 @@ export class TTLockApi {
   private apiClient: AxiosInstance;
   public accessToken: string | null = null;
   public refreshToken: string | null = null;
-  private tokenMutex = new Mutex();
+  private tokenMutex = new SimpleMutex();
   private usageTracker: UsageTracker | undefined;
 
   constructor(private log: Logging, private clientId: string, private clientSecret: string, usageTracker?: UsageTracker) {
@@ -50,13 +49,13 @@ export class TTLockApi {
         }
       }
       const response: AxiosResponse = await Promise.race([
-        this.apiClient.post('oauth2/token', qs.stringify({
+        this.apiClient.post('oauth2/token', new URLSearchParams({
           client_id: this.clientId,
           client_secret: this.clientSecret,
           grant_type: 'password',
           username,
           password: encryptedPassword,
-        })),
+        }).toString()),
         new Promise((_, reject) => setTimeout(() => reject(new Error('TTLock API authentication timed out')), 15000)),
       ]) as AxiosResponse;
 
@@ -88,12 +87,12 @@ export class TTLockApi {
           throw new Error('API usage budget exhausted (refreshToken)');
         }
       }
-      const response = await this.apiClient.post('oauth2/token', qs.stringify({
+      const response = await this.apiClient.post('oauth2/token', new URLSearchParams({
         client_id: this.clientId,
         client_secret: this.clientSecret,
         grant_type: 'refresh_token',
         refresh_token: this.refreshToken,
-      }));
+      }).toString());
 
       if (response.data.access_token && response.data.refresh_token) {
         this.accessToken = response.data.access_token;
@@ -137,7 +136,17 @@ export class TTLockApi {
             Authorization: `Bearer ${this.accessToken}`,
           },
           params: method === 'GET' ? requestData : undefined,
-          data: method === 'POST' ? qs.stringify(requestData) : undefined,
+          data: method === 'POST'
+            ? new URLSearchParams(
+              Object.entries(requestData).reduce<Record<string, string>>(
+                (acc, [key, value]) => {
+                  acc[key] = String(value);
+                  return acc;
+                },
+                {},
+              ),
+            ).toString()
+            : undefined,
         });
 
         if ('errcode' in response.data && response.data.errcode !== 0) {

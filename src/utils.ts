@@ -5,9 +5,30 @@ import type {
   Logging,
 } from 'homebridge';
 
+import fs from 'node:fs/promises';
 import path from 'node:path';
-import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+
+export class SimpleMutex {
+  private _locked = false;
+  private _waiting: Array<() => void> = [];
+
+  async acquire(): Promise<() => void> {
+    while (this._locked) {
+      await new Promise<void>(resolve => this._waiting.push(resolve));
+    }
+    this._locked = true;
+    return () => {
+      this._locked = false;
+      if (this._waiting.length > 0) {
+        const next = this._waiting.shift();
+        if (next) {
+          next();
+        }
+      }
+    };
+  }
+}
 
 export function deferAndCombine<T, U>(
   fn: ((requestCount: number) => Promise<T>) | (() => Promise<T>),

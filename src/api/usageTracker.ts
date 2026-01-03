@@ -2,8 +2,9 @@ import { API, Logging } from 'homebridge';
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Mutex } from 'async-mutex';
 import { EventEmitter } from 'node:events';
+
+import { SimpleMutex } from '../utils.js';
 
 type StoredUsage = {
   year: number;
@@ -18,7 +19,7 @@ export class UsageTracker extends EventEmitter {
   private state: StoredUsage | null = null;
   private log: Logging;
   private api: API;
-  private mutex = new Mutex();
+  private mutex = new SimpleMutex();
   private rolloverInterval?: NodeJS.Timeout;
   private currentTier = 0;
   private pendingReserved = 0;

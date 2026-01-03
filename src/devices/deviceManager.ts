@@ -6,7 +6,6 @@ import TTLockAccessCodePlatform from '../platform.js';
 import type { Passcode, SysInfo } from './deviceTypes.js';
 import type { TTLockApi } from '../api/ttlockApi.js';
 
-
 export const deviceEventEmitter = new EventEmitter();
 
 export default class DeviceManager {

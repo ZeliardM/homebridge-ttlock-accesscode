@@ -20,8 +20,8 @@ import type TTLockAccessCodePlatform from '../platform.js';
 import type {
   CharacteristicDescriptor,
   DescriptorContext,
-  TTLockDevice,
   SysInfo,
+  TTLockDevice,
 } from './deviceTypes.js';
 import type { TTLockAccessCodeAccessoryContext } from '../platform.js';
 
