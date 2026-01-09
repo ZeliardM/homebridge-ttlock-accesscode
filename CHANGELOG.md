@@ -1,4 +1,12 @@
 # Changelog
+## [v2.0.0-beta.6](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.6)
+
+### Other Changes
+
+- npm(deps-dev): bump @stylistic/eslint-plugin from 5.6.1 to 5.7.0 in the stylistic group [#13](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/13) (@dependabot[bot])
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.0-beta.5...v2.0.0-beta.6
+
 ## [v2.0.0-beta.5](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.5) (2026-01-03)
 
 ### Bug Fixes
