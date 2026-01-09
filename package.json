@@ -1,7 +1,7 @@
 {
   "displayName": "Homebridge TTLock Access Code",
   "name": "homebridge-ttlock-accesscode",
-  "version": "2.0.0-beta.5",
+  "version": "2.0.0-beta.6",
   "description": "Plugin that uses TTLock Cloud API to communicate with TTLock Devices connected to the G2 Gateway.",
   "license": "MIT",
   "type": "module",
