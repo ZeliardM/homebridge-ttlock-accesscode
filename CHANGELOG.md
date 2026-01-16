@@ -1,4 +1,12 @@
 # Changelog
+## [v2.0.0-beta.7](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.7)
+
+### Other Changes
+
+- npm(deps-dev): bump @types/node from 25.0.3 to 25.0.9 [#15](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/15) (@dependabot[bot])
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.0-beta.6...v2.0.0-beta.7
+
 ## [v2.0.0-beta.6](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.6) (2026-01-14)
 
 ### Other Changes
