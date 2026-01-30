@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- npm(deps): bump axios from 1.13.2 to 1.13.4 [#21](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/21) (@dependabot[bot])
 - npm(deps-dev): bump @types/node from 25.0.9 to 25.0.10 [#20](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/20) (@dependabot[bot])
 - npm(deps-dev): bump homebridge from 2.0.0-beta.68 to 2.0.0-beta.69 [#19](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/19) (@dependabot[bot])
 - npm(deps-dev): bump typescript-eslint from 8.53.0 to 8.53.1 [#18](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/18) (@dependabot[bot])
