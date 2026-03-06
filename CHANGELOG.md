@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- npm(deps-dev): bump @stylistic/eslint-plugin from 5.9.0 to 5.10.0 in the stylistic group [#39](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/39) (@dependabot[bot])
 - npm(deps-dev): bump rimraf from 6.1.2 to 6.1.3 [#38](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/38) (@dependabot[bot])
 - npm(deps-dev): bump typescript-eslint from 8.56.0 to 8.56.1 [#37](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/37) (@dependabot[bot])
 - npm(deps-dev): bump homebridge from 2.0.0-beta.71 to 2.0.0-beta.75 [#36](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/36) (@dependabot[bot])
