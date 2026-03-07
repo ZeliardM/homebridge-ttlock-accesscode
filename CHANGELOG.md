@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- [other] Update dependencies and README.md [7c3a940](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/7c3a940bed240a05396f4a40d7140b8b2e0b722d) (@ZeliardM)
 - npm(deps-dev): bump homebridge from 2.0.0-beta.75 to 2.0.0-beta.77 [#42](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/42) (@dependabot[bot])
 - npm(deps-dev): bump nodemon from 3.1.11 to 3.1.14 [#41](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/41) (@dependabot[bot])
 - npm(deps): bump axios from 1.13.5 to 1.13.6 [#40](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/40) (@dependabot[bot])
