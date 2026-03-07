@@ -5,6 +5,7 @@
 
 - npm(deps-dev): bump homebridge from 2.0.0-beta.75 to 2.0.0-beta.77 [#42](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/42) (@dependabot[bot])
 - npm(deps-dev): bump nodemon from 3.1.11 to 3.1.14 [#41](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/41) (@dependabot[bot])
+- npm(deps): bump axios from 1.13.5 to 1.13.6 [#40](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/40) (@dependabot[bot])
 - npm(deps-dev): bump @stylistic/eslint-plugin from 5.9.0 to 5.10.0 in the stylistic group [#39](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/39) (@dependabot[bot])
 - npm(deps-dev): bump rimraf from 6.1.2 to 6.1.3 [#38](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/38) (@dependabot[bot])
 - npm(deps-dev): bump typescript-eslint from 8.56.0 to 8.56.1 [#37](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/37) (@dependabot[bot])
