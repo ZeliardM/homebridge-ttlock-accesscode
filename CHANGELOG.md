@@ -1,8 +1,13 @@
 # Changelog
 ## [v2.0.0-beta.7](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0-beta.7)
 
+### Bug Fixes
+
+- [bug] Fix Issue Validation comments to display information needed [00acb65](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/00acb65fe3a6f09a64e6a5d5513348e4933e9753) (@ZeliardM)
+
 ### Other Changes
 
+- [other] Update workflows and scripts [a5130c8](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/a5130c8c164f2e8db4962cd4871f0e7543ae953a) (@ZeliardM)
 - [other] Update dependencies and README.md [7c3a940](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/7c3a940bed240a05396f4a40d7140b8b2e0b722d) (@ZeliardM)
 - npm(deps-dev): bump homebridge from 2.0.0-beta.75 to 2.0.0-beta.77 [#42](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/42) (@dependabot[bot])
 - npm(deps-dev): bump nodemon from 3.1.11 to 3.1.14 [#41](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/41) (@dependabot[bot])
