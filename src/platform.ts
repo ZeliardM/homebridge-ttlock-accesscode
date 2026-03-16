@@ -173,7 +173,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     this.log.debug('Finished launching');
 
     try {
-      await this.startTTLockApi();
+      const apiStarted = await this.startTTLockApiWithRetry();
+      if (!apiStarted) {
+        this.log.warn('TTLock API did not start before shutdown; skipping device manager startup');
+        return;
+      }
 
       this.log.debug('Initializing DeviceManager');
       this.deviceManager = new DeviceManager(this);
@@ -187,6 +191,28 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     } catch (error) {
       this.log.error('An error occurred during startup:', error);
     }
+  }
+
+  private async startTTLockApiWithRetry(): Promise<boolean> {
+    let attempt = 0;
+    while (!this.isShuttingDown) {
+      try {
+        await this.startTTLockApi();
+        if (attempt > 0) {
+          this.log.info('TTLock API startup recovered after retries');
+        }
+        return true;
+      } catch (error) {
+        attempt++;
+        const delayMs = Math.min(5 * 60 * 1000, Math.pow(2, Math.min(attempt, 8)) * 1000);
+        this.log.error(
+          `TTLock API startup attempt ${attempt} failed; retrying in ${Math.floor(delayMs / 1000)}s:`,
+          error,
+        );
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+    return false;
   }
 
   private setupPeriodicDiscovery(discoveredDeviceIds: Set<string>): void {
@@ -244,6 +270,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       return;
     }
     this.periodicDeviceDiscovering = true;
+    let discoverySucceeded = false;
     discoveredDeviceIds.clear();
     this.log.debug('Cleared discoveredDeviceIds set before discovery.');
     try {
@@ -262,11 +289,16 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
           this.log.debug('Error reserving budget for periodic discovery', error);
         }
         await this.deviceManager.discoverDevices();
+        discoverySucceeded = true;
       }
     } catch (error) {
       this.log.error('Error during periodic device discovery:', error);
     } finally {
-      this.handleOfflineDevices(discoveredDeviceIds);
+      if (discoverySucceeded) {
+        this.handleOfflineDevices(discoveredDeviceIds);
+      } else {
+        this.log.warn('Skipping offline accessory reconciliation because periodic discovery did not complete successfully');
+      }
       this.periodicDeviceDiscovering = false;
       this.periodicDeviceDiscoveryEmitter.emit('periodicDeviceDiscoveryComplete');
       this.log.debug('Finished periodic device discovery');
@@ -391,6 +423,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       await this.createAndAuthenticateApi();
       this.log.debug('TTLock API process started successfully');
     } catch (error) {
+      this.stopTTLockApi();
       this.log.error(`Error starting TTLock API process: ${error instanceof Error ? error.message : 'Unknown error'}`);
       throw error;
     }

@@ -15,6 +15,7 @@ import { EventEmitter } from 'node:events';
 
 import accessoryInformation from './accessoryInformation.js';
 import DeviceManager from './deviceManager.js';
+import { TTLockApiError, TTLockApiErrorCategory } from '../api/ttlockApi.js';
 import { deferAndCombine, prefixLogger } from '../utils.js';
 import type TTLockAccessCodePlatform from '../platform.js';
 import type {
@@ -33,6 +34,8 @@ export default abstract class HomeKitDevice {
   protected previousSnapshot?: TTLockDevice;
   protected pollingInterval?: NodeJS.Timeout;
   protected updateEmitter = new EventEmitter();
+  private consecutivePollFailures = 0;
+  private readonly maxConsecutivePollFailures = 3;
 
   private static locks: Map<string, Promise<unknown>> = new Map();
   private pendingChanges: Map<string, { pendingValue: CharacteristicValue; count: number }> = new Map();
@@ -220,14 +223,26 @@ export default abstract class HomeKitDevice {
         }
         await this.updateAllServicesAndCharacteristics(forceUpdate);
         this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
+        this.consecutivePollFailures = 0;
+        this.ttlockDevice.offline = false;
       } catch (error) {
+        this.consecutivePollFailures++;
         if (error instanceof Error && error.message.startsWith('No sys_info returned for ')) {
           this.log.warn(`Poll update failed: ${error.message}`);
         } else {
-          this.log.error('Error during poll update:', error);
+          this.log.warn(
+            `Poll update error (failure ${this.consecutivePollFailures}/${this.maxConsecutivePollFailures}):`,
+            error,
+          );
         }
-        this.ttlockDevice.offline = true;
-        await this.stopPolling();
+
+        if (this.shouldStopPollingForError(error)) {
+          this.log.error('Stopping polling and marking device offline due to persistent/non-recoverable errors');
+          this.ttlockDevice.offline = true;
+          await this.stopPolling();
+        } else {
+          this.log.debug('Keeping polling active; error appears recoverable/transient');
+        }
       } finally {
         this.isUpdating = false;
         this.updateEmitter.emit('updateComplete');
@@ -331,8 +346,10 @@ export default abstract class HomeKitDevice {
       return value as CharacteristicValue;
     } catch (error) {
       this.log.error(`OnGet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
-      this.ttlockDevice.offline = true;
-      await this.stopPolling();
+      if (this.shouldStopPollingForError(error)) {
+        this.ttlockDevice.offline = true;
+        await this.stopPolling();
+      }
       return this.defaultValueForCharacteristic(descriptor.type);
     }
   }
@@ -392,13 +409,40 @@ export default abstract class HomeKitDevice {
         return result;
       } catch (error) {
         this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
-        this.ttlockDevice.offline = true;
-        await this.stopPolling();
+        if (this.shouldStopPollingForError(error)) {
+          this.ttlockDevice.offline = true;
+          await this.stopPolling();
+        }
       } finally {
         this.isUpdating = false;
         this.updateEmitter.emit('updateComplete');
       }
     });
+  }
+
+  private shouldStopPollingForError(error: unknown): boolean {
+    if (error instanceof Error && error.message.startsWith('No sys_info returned for ')) {
+      return true;
+    }
+
+    if (error instanceof TTLockApiError) {
+      switch (error.category) {
+        case TTLockApiErrorCategory.BudgetExhausted:
+        case TTLockApiErrorCategory.AuthExpired:
+        case TTLockApiErrorCategory.AuthInvalid:
+        case TTLockApiErrorCategory.NetworkTransient:
+        case TTLockApiErrorCategory.ServerTransient:
+        case TTLockApiErrorCategory.RateLimited:
+          return false;
+        case TTLockApiErrorCategory.ClientInvalidRequest:
+        case TTLockApiErrorCategory.InvalidResponse:
+        case TTLockApiErrorCategory.Unknown:
+        default:
+          return this.consecutivePollFailures >= this.maxConsecutivePollFailures;
+      }
+    }
+
+    return this.consecutivePollFailures >= this.maxConsecutivePollFailures;
   }
 
   protected async updateAllServicesAndCharacteristics(forceUpdate: boolean): Promise<void> {

@@ -3,18 +3,55 @@ import type { Logging } from 'homebridge';
 import axios from 'axios';
 import crypto from 'crypto';
 import { AxiosInstance } from 'axios';
-import type { AxiosResponse } from 'axios';
 
 import { UsageTracker } from './usageTracker.js';
 import { SimpleMutex } from '../utils.js';
 import { FeatureInfo, Passcode, SysInfo, TTLockDevice } from '../devices/deviceTypes.js';
 
-class RequestFailed extends Error {
-  constructor(message: string) {
+export enum TTLockApiErrorCategory {
+  AuthExpired = 'AuthExpired',
+  AuthInvalid = 'AuthInvalid',
+  BudgetExhausted = 'BudgetExhausted',
+  ClientInvalidRequest = 'ClientInvalidRequest',
+  InvalidResponse = 'InvalidResponse',
+  NetworkTransient = 'NetworkTransient',
+  RateLimited = 'RateLimited',
+  ServerTransient = 'ServerTransient',
+  Unknown = 'Unknown',
+}
+
+export class TTLockApiError extends Error {
+  public wasLogged = false;
+
+  constructor(
+    message: string,
+    public readonly category: TTLockApiErrorCategory,
+    public readonly retryable: boolean,
+    public readonly endpoint?: string,
+    public readonly statusCode?: number,
+    public readonly errcode?: number,
+    public readonly cause?: unknown,
+  ) {
     super(message);
-    this.name = 'RequestFailed';
+    this.name = 'TTLockApiError';
+  }
+
+  public get authRelated(): boolean {
+    return this.category === TTLockApiErrorCategory.AuthExpired || this.category === TTLockApiErrorCategory.AuthInvalid;
   }
 }
+
+type AuthResponse = {
+  access_token?: string;
+  refresh_token?: string;
+  errcode?: number;
+  errmsg?: string;
+};
+
+type ApiErrorPayload = {
+  errcode?: number;
+  errmsg?: string;
+};
 
 export class TTLockApi {
   private apiClient: AxiosInstance;
@@ -22,6 +59,10 @@ export class TTLockApi {
   public refreshToken: string | null = null;
   private tokenMutex = new SimpleMutex();
   private usageTracker: UsageTracker | undefined;
+  private authUsername: string | null = null;
+  private authPassword: string | null = null;
+  private readonly requestTimeoutMs = 15000;
+  private readonly maxRetries = 3;
 
   constructor(private log: Logging, private clientId: string, private clientSecret: string, usageTracker?: UsageTracker) {
     this.apiClient = axios.create({
@@ -29,6 +70,7 @@ export class TTLockApi {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
+      timeout: this.requestTimeoutMs,
     });
     this.log.debug('TTLockApi initialized');
     this.usageTracker = usageTracker;
@@ -39,55 +81,81 @@ export class TTLockApi {
   }
 
   public async authenticate(username: string, password: string): Promise<void> {
+    this.authUsername = username;
+    this.authPassword = password;
+    await this.authenticateWithPassword(username, password);
+  }
+
+  private async authenticateWithPassword(username: string, password: string): Promise<void> {
     this.log.debug('Authenticating with TTLock API...');
     try {
       const encryptedPassword = this.encryptPassword(password);
       if (this.usageTracker) {
         const ok = await this.usageTracker.tryReserve(1, 'authenticate');
         if (!ok) {
-          throw new Error('API usage budget exhausted (authenticate)');
+          throw new TTLockApiError(
+            'API usage budget exhausted (authenticate)',
+            TTLockApiErrorCategory.BudgetExhausted,
+            false,
+            'oauth2/token',
+          );
         }
       }
-      const response: AxiosResponse = await Promise.race([
-        this.apiClient.post('oauth2/token', new URLSearchParams({
-          client_id: this.clientId,
-          client_secret: this.clientSecret,
-          grant_type: 'password',
-          username,
-          password: encryptedPassword,
-        }).toString()),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('TTLock API authentication timed out')), 15000)),
-      ]) as AxiosResponse;
+
+      const response = await this.apiClient.post<AuthResponse>('oauth2/token', new URLSearchParams({
+        client_id: this.clientId,
+        client_secret: this.clientSecret,
+        grant_type: 'password',
+        username,
+        password: encryptedPassword,
+      }).toString());
 
       if (response.data.access_token && response.data.refresh_token) {
         this.accessToken = response.data.access_token;
         this.refreshToken = response.data.refresh_token;
         this.log.info('Authenticated with TTLock API');
       } else {
-        this.log.error('Authentication response did not contain tokens:', response.data);
-        throw new Error('Authentication failed: No tokens received');
+        throw new TTLockApiError(
+          `Authentication failed: invalid token response (${JSON.stringify(response.data)})`,
+          TTLockApiErrorCategory.AuthInvalid,
+          false,
+          'oauth2/token',
+          undefined,
+          response.data.errcode,
+        );
       }
     } catch (error) {
-      this.handleError('Failed to authenticate with TTLock API', error);
-      throw error;
+      const normalized = this.normalizeError(error, 'oauth2/token');
+      this.logApiError('Failed to authenticate with TTLock API', normalized);
+      throw normalized;
     }
   }
 
-  private async refreshTokenIfNeeded(): Promise<void> {
+  private async refreshTokenIfNeededLocked(): Promise<void> {
     if (!this.refreshToken) {
-      throw new Error('No refresh token available. Please call authenticate() first.');
+      throw new TTLockApiError(
+        'No refresh token available. Full re-authentication required.',
+        TTLockApiErrorCategory.AuthInvalid,
+        false,
+        'oauth2/token',
+      );
     }
 
-    const release = await this.tokenMutex.acquire();
     try {
       this.log.debug('Refreshing access token...');
       if (this.usageTracker) {
         const ok = await this.usageTracker.tryReserve(1, 'refreshToken');
         if (!ok) {
-          throw new Error('API usage budget exhausted (refreshToken)');
+          throw new TTLockApiError(
+            'API usage budget exhausted (refreshToken)',
+            TTLockApiErrorCategory.BudgetExhausted,
+            false,
+            'oauth2/token',
+          );
         }
       }
-      const response = await this.apiClient.post('oauth2/token', new URLSearchParams({
+
+      const response = await this.apiClient.post<AuthResponse>('oauth2/token', new URLSearchParams({
         client_id: this.clientId,
         client_secret: this.clientSecret,
         grant_type: 'refresh_token',
@@ -99,46 +167,96 @@ export class TTLockApi {
         this.refreshToken = response.data.refresh_token;
         this.log.debug('Access token refreshed');
       } else {
-        throw new Error('Failed to refresh token: Invalid response');
+        throw new TTLockApiError(
+          `Failed to refresh token: invalid response (${JSON.stringify(response.data)})`,
+          TTLockApiErrorCategory.AuthInvalid,
+          false,
+          'oauth2/token',
+          undefined,
+          response.data.errcode,
+        );
       }
     } catch (error) {
-      this.handleError('Failed to refresh access token', error);
-      throw error;
+      throw this.normalizeError(error, 'oauth2/token');
+    }
+  }
+
+  private async recoverAuthentication(failedToken: string | null, endpoint: string): Promise<void> {
+    const release = await this.tokenMutex.acquire();
+    try {
+      if (this.accessToken && this.accessToken !== failedToken) {
+        this.log.debug(`Token already refreshed by a concurrent request for endpoint ${endpoint}`);
+        return;
+      }
+
+      try {
+        await this.refreshTokenIfNeededLocked();
+        this.log.debug(`Recovered authentication via refresh token for endpoint ${endpoint}`);
+        return;
+      } catch (refreshError) {
+        const normalizedRefreshError = this.normalizeError(refreshError, endpoint);
+        this.log.warn(`Refresh token flow failed for endpoint ${endpoint}: ${normalizedRefreshError.message}`);
+      }
+
+      if (!this.authUsername || !this.authPassword) {
+        throw new TTLockApiError(
+          'No stored credentials available for full re-authentication',
+          TTLockApiErrorCategory.AuthInvalid,
+          false,
+          endpoint,
+        );
+      }
+
+      await this.authenticateWithPassword(this.authUsername, this.authPassword);
+      this.log.info(`Recovered authentication via full credential re-login for endpoint ${endpoint}`);
     } finally {
       release();
     }
   }
 
   private async makeAuthenticatedRequest<T>(endpoint: string, method: 'GET' | 'POST' = 'GET', data?: Record<string, unknown>): Promise<T> {
-    const maxRetries = 3;
-
-    if (!this.accessToken) {
-      throw new Error('Not authenticated. Please call authenticate() first.');
-    }
-
-    const requestData = {
-      ...data,
-      clientId: this.clientId,
-      accessToken: this.accessToken,
-      date: Date.now(),
-    };
-
     const fullEndpoint = `v3/${endpoint}`;
+    let authRecoveryAttempted = false;
+    let lastError: TTLockApiError | undefined;
 
-    let lastError: unknown = new Error('Unknown request error');
+    if (!this.accessToken && this.authUsername && this.authPassword) {
+      await this.authenticateWithPassword(this.authUsername, this.authPassword);
+    }
+    if (!this.accessToken) {
+      throw new TTLockApiError(
+        'Not authenticated and credentials are unavailable',
+        TTLockApiErrorCategory.AuthInvalid,
+        false,
+        endpoint,
+      );
+    }
 
     if (this.usageTracker) {
       const consumedReserved = await this.usageTracker.consumePendingReservation(1);
       if (!consumedReserved) {
         const ok = await this.usageTracker.tryReserve(1, `request:${endpoint}`);
         if (!ok) {
-          throw new Error(`API usage budget exhausted (${endpoint})`);
+          throw new TTLockApiError(
+            `API usage budget exhausted (${endpoint})`,
+            TTLockApiErrorCategory.BudgetExhausted,
+            false,
+            endpoint,
+          );
         }
       }
     }
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      let attemptedToken: string | null = this.accessToken;
       try {
+        attemptedToken = this.accessToken;
+        const requestData = {
+          ...data,
+          clientId: this.clientId,
+          accessToken: this.accessToken,
+          date: Date.now(),
+        };
+
         const response = await this.apiClient.request({
           url: fullEndpoint,
           method,
@@ -159,82 +277,243 @@ export class TTLockApi {
             : undefined,
         });
 
-        if ('errcode' in response.data && response.data.errcode !== 0) {
-          throw new RequestFailed(`API returned error: ${response.data.errmsg || 'Unknown error'}`);
+        if (this.isObject(response.data) && 'errcode' in response.data && response.data.errcode !== 0) {
+          const payload = response.data as ApiErrorPayload;
+          throw this.normalizeApiResponseError(payload, endpoint);
         }
 
         return response.data;
       } catch (error) {
-        lastError = error;
+        const normalized = this.normalizeError(error, endpoint);
+        lastError = normalized;
 
-        if (error instanceof RequestFailed) {
-          const errorMsg = error.message;
-          this.log.debug(`Attempt ${attempt + 1} failed: ${errorMsg}`);
-          if (attempt < maxRetries) {
-            const delay = Math.pow(2, attempt) * 1000;
-            this.log.debug(`Retrying in ${delay / 1000} seconds...`);
-            await new Promise(resolve => setTimeout(resolve, delay));
-            continue;
-          }
-          break;
+        if (normalized.authRelated && !authRecoveryAttempted) {
+          authRecoveryAttempted = true;
+          this.log.warn(`Auth failure for ${endpoint}; attempting internal re-authentication`);
+          await this.recoverAuthentication(attemptedToken, endpoint);
+          continue;
         }
 
-        if (axios.isAxiosError(error)) {
-          if (error.response) {
-            if (error.response.status === 401) {
-              this.log.debug('Access token expired, refreshing token...');
-              try {
-                await this.refreshTokenIfNeeded();
-                continue;
-              } catch (error) {
-                lastError = error;
-                break;
-              }
-            }
-
-            const rf = new RequestFailed(`Request failed: status=${error.response.status}, body=${JSON.stringify(error.response.data)}`);
-            this.log.error(rf.message);
-
-            if (error.response.status >= 500 && attempt < maxRetries) {
-              const delay = Math.pow(2, attempt) * 1000;
-              this.log.debug(`Server error, retrying in ${delay / 1000} seconds...`);
-              await new Promise(resolve => setTimeout(resolve, delay));
-              lastError = rf;
-              continue;
-            }
-
-            lastError = rf;
-            break;
-          }
-
-          this.log.debug(`Network error on attempt ${attempt + 1}: ${error.message}`);
-          if (attempt < maxRetries) {
-            const delay = Math.pow(2, attempt) * 1000;
-            await new Promise(resolve => setTimeout(resolve, delay));
-            continue;
-          }
-          break;
+        const isLastAttempt = attempt >= this.maxRetries;
+        if (!isLastAttempt && normalized.retryable) {
+          const delay = this.getRetryDelayMs(attempt);
+          this.log.warn(
+            `Retryable TTLock API error on ${endpoint}; category=${normalized.category}; ` +
+            `attempt=${attempt + 1}/${this.maxRetries + 1}; retrying in ${delay}ms`,
+          );
+          await this.sleep(delay);
+          continue;
         }
 
-        this.handleError('Request failed', error);
-        break;
+        // For expected gateway-offline responses, prefer logging at the higher-context caller level.
+        if (!this.isGatewayOfflineError(normalized)) {
+          this.logApiError(`Request failed for ${endpoint}`, normalized);
+        }
+        throw normalized;
       }
     }
 
-    if (lastError instanceof Error) {
+    if (lastError) {
       throw lastError;
     }
-    throw new Error('Max retries reached');
+    throw new TTLockApiError('Max retries reached', TTLockApiErrorCategory.Unknown, false, endpoint);
   }
 
-  private handleError(message: string, error: unknown): void {
-    if (axios.isAxiosError(error)) {
-      this.log.error(`${message}: ${error.response?.data || error.message}`);
-    } else if (error instanceof Error) {
-      this.log.error(`${message}: ${error.message}`);
-    } else {
-      this.log.error(`${message}: ${JSON.stringify(error)}`);
+  private logApiError(message: string, error: TTLockApiError): void {
+    if (error.wasLogged) {
+      return;
     }
+
+    error.wasLogged = true;
+    if (this.isGatewayOfflineError(error)) {
+      this.log.warn(
+        `${message}: gateway offline (endpoint=${error.endpoint ?? 'unknown'} errcode=${error.errcode ?? 'n/a'}). ` +
+        'Will retry on next poll/discovery cycle.',
+      );
+      return;
+    }
+
+    this.log.error(
+      `${message}: category=${error.category} retryable=${error.retryable} endpoint=${error.endpoint ?? 'unknown'} ` +
+      `status=${error.statusCode ?? 'n/a'} errcode=${error.errcode ?? 'n/a'} message=${error.message}`,
+    );
+  }
+
+  private isGatewayOfflineError(error: TTLockApiError): boolean {
+    return error.errcode === -3002 || /gateway is offline/i.test(error.message);
+  }
+
+  private normalizeApiResponseError(payload: ApiErrorPayload, endpoint: string): TTLockApiError {
+    const errcode = payload.errcode;
+    const errmsg = payload.errmsg ?? 'Unknown API error';
+    if (this.looksAuthError(undefined, errcode, errmsg)) {
+      return new TTLockApiError(
+        `TTLock authentication error: ${errmsg}`,
+        TTLockApiErrorCategory.AuthExpired,
+        false,
+        endpoint,
+        undefined,
+        errcode,
+      );
+    }
+    if (this.looksRateLimitError(undefined, errcode, errmsg)) {
+      return new TTLockApiError(
+        `TTLock rate limit error: ${errmsg}`,
+        TTLockApiErrorCategory.RateLimited,
+        true,
+        endpoint,
+        undefined,
+        errcode,
+      );
+    }
+    return new TTLockApiError(
+      `TTLock API returned errcode=${errcode ?? 'n/a'} errmsg=${errmsg}`,
+      TTLockApiErrorCategory.ClientInvalidRequest,
+      false,
+      endpoint,
+      undefined,
+      errcode,
+    );
+  }
+
+  private normalizeError(error: unknown, endpoint?: string): TTLockApiError {
+    if (error instanceof TTLockApiError) {
+      return error;
+    }
+
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      const responseData = error.response?.data as ApiErrorPayload | undefined;
+      const errcode = this.isObject(responseData) ? responseData.errcode : undefined;
+      const errmsg = this.isObject(responseData) ? responseData.errmsg : undefined;
+
+      if (this.looksAuthError(status, errcode, errmsg)) {
+        return new TTLockApiError(
+          `Authentication failed for ${endpoint ?? 'request'}: ${errmsg ?? error.message}`,
+          TTLockApiErrorCategory.AuthExpired,
+          false,
+          endpoint,
+          status,
+          errcode,
+          error,
+        );
+      }
+
+      if (this.looksRateLimitError(status, errcode, errmsg)) {
+        return new TTLockApiError(
+          `Rate limited on ${endpoint ?? 'request'}: ${errmsg ?? error.message}`,
+          TTLockApiErrorCategory.RateLimited,
+          true,
+          endpoint,
+          status,
+          errcode,
+          error,
+        );
+      }
+
+      if (!error.response || error.code === 'ECONNABORTED') {
+        return new TTLockApiError(
+          `Network error on ${endpoint ?? 'request'}: ${error.message}`,
+          TTLockApiErrorCategory.NetworkTransient,
+          true,
+          endpoint,
+          status,
+          errcode,
+          error,
+        );
+      }
+
+      if (status !== undefined && status >= 500) {
+        return new TTLockApiError(
+          `Server error on ${endpoint ?? 'request'}: status=${status}`,
+          TTLockApiErrorCategory.ServerTransient,
+          true,
+          endpoint,
+          status,
+          errcode,
+          error,
+        );
+      }
+
+      if (status !== undefined && status >= 400) {
+        return new TTLockApiError(
+          `Client error on ${endpoint ?? 'request'}: status=${status}`,
+          TTLockApiErrorCategory.ClientInvalidRequest,
+          false,
+          endpoint,
+          status,
+          errcode,
+          error,
+        );
+      }
+
+      return new TTLockApiError(
+        `Unknown axios error on ${endpoint ?? 'request'}: ${error.message}`,
+        TTLockApiErrorCategory.Unknown,
+        false,
+        endpoint,
+        status,
+        errcode,
+        error,
+      );
+    }
+
+    if (error instanceof Error) {
+      const isTimeout = /timed out|timeout/i.test(error.message);
+      return new TTLockApiError(
+        error.message,
+        isTimeout ? TTLockApiErrorCategory.NetworkTransient : TTLockApiErrorCategory.Unknown,
+        isTimeout,
+        endpoint,
+        undefined,
+        undefined,
+        error,
+      );
+    }
+
+    return new TTLockApiError(
+      `Unknown error: ${JSON.stringify(error)}`,
+      TTLockApiErrorCategory.Unknown,
+      false,
+      endpoint,
+      undefined,
+      undefined,
+      error,
+    );
+  }
+
+  private looksAuthError(status?: number, errcode?: number, message?: string): boolean {
+    if (status === 401 || status === 403) {
+      return true;
+    }
+    if (typeof errcode === 'number' && [10002, 10003, 10004, 10005, 10006].includes(errcode)) {
+      return true;
+    }
+    return /token|auth|expired|invalid_grant|credential|login/i.test(message ?? '');
+  }
+
+  private looksRateLimitError(status?: number, errcode?: number, message?: string): boolean {
+    if (status === 429) {
+      return true;
+    }
+    if (typeof errcode === 'number' && [10018, 10019, 10020].includes(errcode)) {
+      return true;
+    }
+    return /too many|rate.?limit|frequency|limit/i.test(message ?? '');
+  }
+
+  private getRetryDelayMs(attempt: number): number {
+    const baseDelay = Math.min(8000, Math.pow(2, attempt) * 1000);
+    const jitter = Math.floor(Math.random() * 250);
+    return baseDelay + jitter;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null;
   }
 
   public async getDevices(): Promise<TTLockDevice[]> {
@@ -248,7 +527,12 @@ export class TTLockApi {
 
     if (!response.list || !Array.isArray(response.list)) {
       this.log.error('Invalid response format: expected list of locks');
-      throw new Error('Invalid response format: expected list of locks');
+      throw new TTLockApiError(
+        'Invalid response format: expected list of locks',
+        TTLockApiErrorCategory.InvalidResponse,
+        false,
+        'lock/list',
+      );
     }
 
     const lockList: TTLockDevice[] = [];
@@ -268,7 +552,8 @@ export class TTLockApi {
         ttlockDevice.last_seen = new Date();
         lockList.push(ttlockDevice);
       } catch (error) {
-        this.handleError(`Failed to fetch details for lock ${lock.lockId}`, error);
+        const normalized = this.normalizeError(error, 'lock/detail|lock/queryOpenState');
+        this.logApiError(`Failed to fetch details for lock ${lock.lockId}`, normalized);
         continue;
       }
     }
@@ -283,6 +568,14 @@ export class TTLockApi {
       modelNum: string;
     }>('lock/detail', 'GET', { lockId });
     const stateResponse = await this.makeAuthenticatedRequest<{ state: number }>('lock/queryOpenState', 'GET', { lockId });
+    if (!detailResponse.firmwareRevision || !detailResponse.hardwareRevision || !detailResponse.modelNum) {
+      throw new TTLockApiError(
+        `Invalid lock/detail response for lockId=${lockId}`,
+        TTLockApiErrorCategory.InvalidResponse,
+        false,
+        'lock/detail',
+      );
+    }
     sysInfo.fw_ver = detailResponse.firmwareRevision.split('.').slice(0, 3).join('.');
     sysInfo.hw_ver = detailResponse.hardwareRevision;
     sysInfo.model = detailResponse.modelNum;
@@ -319,7 +612,8 @@ export class TTLockApi {
       featureInfo.passcode = ((value >> 0n) & 1n) === 1n;
       return featureInfo;
     } catch (error) {
-      this.handleError('Failed to parse featureValue', error);
+      const normalized = this.normalizeError(error, 'feature/parse');
+      this.logApiError('Failed to parse featureValue', normalized);
       featureInfo.passcode = false;
       return featureInfo;
     }
@@ -353,7 +647,12 @@ export class TTLockApi {
 
     if (!response.list || !Array.isArray(response.list)) {
       this.log.error('Invalid response format: expected list of passcodes');
-      throw new Error('Invalid response format: expected list of passcodes');
+      throw new TTLockApiError(
+        'Invalid response format: expected list of passcodes',
+        TTLockApiErrorCategory.InvalidResponse,
+        false,
+        'lock/listKeyboardPwd',
+      );
     }
 
     this.log.debug(`Found ${response.list.length} passcodes for lock: ${lockId}`);
