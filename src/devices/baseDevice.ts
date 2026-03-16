@@ -560,13 +560,19 @@ export default abstract class HomeKitDevice {
     const needsInit = currentValue === undefined || currentValue === null;
     const homeKitValueChanged = needsInit || currentValue !== nextValue;
     const snapshotChanged = previousValue !== nextValue;
-    const shouldUpdate = homeKitValueChanged && (force || needsInit || snapshotChanged);
+    const shouldUpdate = force || needsInit || snapshotChanged;
 
     if (shouldUpdate) {
-      if (label) {
+      if (label && homeKitValueChanged) {
         this.log.debug(`Updating ${label}: ${previousValue} → ${nextValue}`);
       }
-      this.updateValue(service, characteristic, alias, nextValue as unknown as Nullable<CharacteristicValue>);
+      this.updateValue(
+        service,
+        characteristic,
+        alias,
+        nextValue as unknown as Nullable<CharacteristicValue>,
+        homeKitValueChanged,
+      );
     }
   }
 
@@ -581,8 +587,11 @@ export default abstract class HomeKitDevice {
     characteristic: Characteristic,
     deviceAlias: string,
     value: Nullable<CharacteristicValue> | Error | HapStatusError,
+    logUpdate = true,
   ): void {
-    this.log.info(`Updating ${this.platform.lsc(service, characteristic)} on ${deviceAlias} to ${value}`);
+    if (logUpdate) {
+      this.log.info(`Updating ${this.platform.lsc(service, characteristic)} on ${deviceAlias} to ${value}`);
+    }
     characteristic.updateValue(value);
   }
 
