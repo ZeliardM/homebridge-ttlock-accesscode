@@ -163,7 +163,7 @@ jobs:
         id: post
         shell: bash
         env:
-          DISCORD_TITLE: ${{ github.event.release.prerelease && 'Kasa Python Beta Release' || 'Kasa Python Release' }}
+          DISCORD_TITLE: ${{ github.event.release.prerelease && 'TTLock AccessCode Beta Release' || 'TTLock AccessCode Release' }}
           WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           set -euo pipefail

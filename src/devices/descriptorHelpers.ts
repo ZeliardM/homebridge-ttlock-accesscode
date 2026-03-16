@@ -12,20 +12,21 @@ export function buildLockDescriptors(
       name: 'LockCurrentState',
       writable: false,
       syncGroup: 'lockState',
-      getInitial: context => context!.device.ttlockDevice.sys_info.state ?? C.LockCurrentState.SECURED,
-      getCurrent: context => context!.device.ttlockDevice.sys_info.state ?? C.LockCurrentState.SECURED,
+      syncHomeKitValueAfterSet: true,
+      getInitial: context => context!.device.state ?? C.LockCurrentState.SECURED,
+      getCurrent: context => context!.device.state ?? C.LockCurrentState.SECURED,
     },
     {
       type: C.LockTargetState,
       name: 'LockTargetState',
       writable: true,
       syncGroup: 'lockState',
-      getInitial: context => context!.device.ttlockDevice.sys_info.state ?? C.LockTargetState.SECURED,
-      getCurrent: context => context!.device.ttlockDevice.sys_info.state ?? C.LockTargetState.SECURED,
+      syncHomeKitValueAfterSet: true,
+      getInitial: context => context!.device.state ?? C.LockTargetState.SECURED,
+      getCurrent: context => context!.device.state ?? C.LockTargetState.SECURED,
       applySet: async (value, context) => {
         await setTarget(Number(value), context);
-        context.device.ttlockDevice.sys_info.state = Number(value);
-        context.device.updateDeviceField('state', context.device.ttlockDevice.sys_info.state);
+        context.device.state = Number(value);
       },
     },
   ];
@@ -37,20 +38,20 @@ export function buildBatteryDescriptors(C: typeof Characteristic): Characteristi
       type: C.BatteryLevel,
       name: 'BatteryLevel',
       writable: false,
-      getInitial: context => context!.device.ttlockDevice.sys_info.battery ?? 100,
-      getCurrent: context => context!.device.ttlockDevice.sys_info.battery ?? 100,
+      getInitial: context => context!.device.battery ?? 100,
+      getCurrent: context => context!.device.battery ?? 100,
     },
     {
       type: C.StatusLowBattery,
       name: 'StatusLowBattery',
       writable: false,
       getInitial: context => {
-        return (context!.device.ttlockDevice.sys_info.battery < 20)
+        return (context!.device.battery < 20)
           ? C.StatusLowBattery.BATTERY_LEVEL_LOW
           : C.StatusLowBattery.BATTERY_LEVEL_NORMAL;
       },
       getCurrent: context => {
-        return (context!.device.ttlockDevice.sys_info.battery < 20)
+        return (context!.device.battery < 20)
           ? C.StatusLowBattery.BATTERY_LEVEL_LOW
           : C.StatusLowBattery.BATTERY_LEVEL_NORMAL;
       },
@@ -78,11 +79,7 @@ export function buildAccessCodeDescriptors(
       writable: true,
       getInitial: () => '',
       getCurrent: () => '',
-      applySet: async (value, context) => {
-        const result = await setAccessCodeControlPoint(value, context);
-        context.device.updateDeviceField('passcodes', context.device.ttlockDevice.sys_info.passcodes!);
-        return result;
-      },
+      applySet: async (value, context) => await setAccessCodeControlPoint(value, context),
     },
     {
       type: C.ConfigurationState,

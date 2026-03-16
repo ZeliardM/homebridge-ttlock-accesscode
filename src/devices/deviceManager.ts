@@ -9,8 +9,8 @@ import type { TTLockApi } from '../api/ttlockApi.js';
 export const deviceEventEmitter = new EventEmitter();
 
 export default class DeviceManager {
-  private api: TTLockApi | undefined;
-  private log: Logger;
+  private readonly api: TTLockApi;
+  private readonly log: Logger;
   private readonly platform: TTLockAccessCodePlatform;
 
   constructor(platform: TTLockAccessCodePlatform) {
@@ -23,14 +23,26 @@ export default class DeviceManager {
   }
 
   public async discoverDevices(): Promise<void> {
-    const devices = await this.api!.getDevices();
-    for (const device of devices) {
-      deviceEventEmitter.emit('deviceDiscovered', device);
+    this.log.debug('Starting device discovery...');
+    try {
+      const devices = await this.api.getDevices();
+      for (const device of devices) {
+        this.log.debug(`Discovered device: ${device.sys_info.alias} (${device.sys_info.device_id})`);
+        deviceEventEmitter.emit('deviceDiscovered', device);
+      }
+    } catch (error) {
+      this.handleManagerError(error, 'discoverDevices');
+      throw error;
     }
   }
 
   async getSysInfo(deviceId: string): Promise<Partial<SysInfo> | undefined> {
-    return this.api!.getSysInfo(deviceId);
+    try {
+      return await this.api.getSysInfo(deviceId);
+    } catch (error) {
+      this.handleManagerError(error, 'getSysInfo');
+      throw error;
+    }
   }
 
   async controlDevice(deviceId: string, feature: string, value: CharacteristicValue): Promise<void> {
@@ -55,10 +67,10 @@ export default class DeviceManager {
     try {
       switch (action) {
         case 'lock':
-          await this.api!.lock(deviceId);
+          await this.api.lock(deviceId);
           break;
         case 'unlock':
-          await this.api!.unlock(deviceId);
+          await this.api.unlock(deviceId);
           break;
         default:
           throw new Error(`Unsupported action: ${action} for feature: ${feature}`);
@@ -77,12 +89,12 @@ export default class DeviceManager {
     try {
       switch (operation) {
         case 'add':
-          return await this.api!.addPasscode(deviceId, passcode!);
+          return await this.api.addPasscode(deviceId, passcode!);
         case 'delete':
-          await this.api!.deletePasscode(deviceId, passcode!);
+          await this.api.deletePasscode(deviceId, passcode!);
           break;
         case 'get':
-          return await this.api!.getPasscodes(deviceId);
+          return await this.api.getPasscodes(deviceId);
         default:
           throw new Error(`Unsupported passcode operation: ${operation}`);
       }
@@ -90,5 +102,16 @@ export default class DeviceManager {
       this.log.error(`Failed to manage passcodes on device ${deviceId} for operation ${operation}:`, error);
       throw error;
     }
+  }
+
+  private handleManagerError(error: unknown, context: string): void {
+    if (error instanceof Error) {
+      this.log.error(`[${context}] Error: ${error.message}`);
+      if (error.stack) {
+        this.log.debug(error.stack);
+      }
+      return;
+    }
+    this.log.error(`[${context}] Unknown error: ${JSON.stringify(error)}`);
   }
 }

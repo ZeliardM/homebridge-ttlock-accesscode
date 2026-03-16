@@ -2,6 +2,7 @@
   "pluginAlias": "TTLockAccessCode",
   "pluginType": "platform",
   "singular": true,
+  "strictValidation": true,
   "headerDisplay": "TTLock Access Code Plugin.<p>Follow the [README](https://github.com/ZeliardM/homebridge-ttlock-accesscode/blob/latest/README.md) for configuration instructions and then click \"Save\" to get started.</p>",
   "footerDisplay": "",
   "schema": {

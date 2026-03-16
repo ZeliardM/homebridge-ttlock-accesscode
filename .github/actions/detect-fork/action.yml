@@ -2,9 +2,9 @@ name: Detect Fork Context
 description: Output Fork Detection
 inputs:
   repository:
-    description: Expected upstream repository (owner/name)
-    required: false
+    description: Repository Name
     default: 'ZeliardM/homebridge-ttlock-accesscode'
+    required: false
 outputs:
   is_fork:
     description: True if the Repository is a Fork, false if it is the Main Repository

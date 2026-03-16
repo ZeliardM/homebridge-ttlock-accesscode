@@ -176,7 +176,7 @@ def _post_to_discord(webhook: str, payload: dict) -> int:
             data=data,
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "homebridge-tlock-accesscode/discord-notify",
+                "User-Agent": "homebridge-ttlock-accesscode/discord-notify",
             },
             method="POST",
         )

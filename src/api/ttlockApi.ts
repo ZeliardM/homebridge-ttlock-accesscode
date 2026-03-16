@@ -127,6 +127,16 @@ export class TTLockApi {
 
     let lastError: unknown = new Error('Unknown request error');
 
+    if (this.usageTracker) {
+      const consumedReserved = await this.usageTracker.consumePendingReservation(1);
+      if (!consumedReserved) {
+        const ok = await this.usageTracker.tryReserve(1, `request:${endpoint}`);
+        if (!ok) {
+          throw new Error(`API usage budget exhausted (${endpoint})`);
+        }
+      }
+    }
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const response = await this.apiClient.request({
@@ -349,7 +359,7 @@ export class TTLockApi {
     this.log.debug(`Found ${response.list.length} passcodes for lock: ${lockId}`);
     return response.list.map((item, index) => ({
       passcode_id: item.keyboardPwdId.toString(),
-      index: (index).toString(),
+      index: index.toString(),
       lock_id: item.lockId.toString(),
       passcode: item.keyboardPwd,
     }));

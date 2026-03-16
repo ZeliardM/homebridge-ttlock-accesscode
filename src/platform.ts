@@ -55,6 +55,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private readonly homekitDevicesById: Map<string, HomeKitDevice> = new Map();
   private deviceDiscoveredHandler?: (device: TTLockDevice) => Promise<void>;
   private platformInitialization: Promise<void>;
+  private usageTierChangedHandler?: () => void;
 
   constructor(public readonly log: Logging, config: PlatformConfig, public readonly api: API) {
     this.Service = this.api.hap.Service;
@@ -84,9 +85,12 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       if (!this.isShuttingDown) {
         this.isShuttingDown = true;
       }
+      if (this.deviceDiscoveredHandler) {
+        deviceEventEmitter.off('deviceDiscovered', this.deviceDiscoveredHandler);
+      }
       this.log.debug('Stopping all polling tasks');
       for (const device of this.homekitDevicesById.values()) {
-        await device.stopPolling();
+        await device.stopPolling(true);
       }
       this.log.debug('Waiting for tasks to complete');
       try {
@@ -339,14 +343,17 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const existingDevice = this.homekitDevicesById.get(device.sys_info.device_id);
     if (existingDevice) {
       if (!existingDevice.isUpdating) {
-        if (existingDevice.ttlockDevice.offline && !device.offline) {
+        const comingOnline = existingDevice.ttlockDevice.offline && !device.offline;
+        existingDevice.ttlockDevice.sys_info = device.sys_info;
+        existingDevice.ttlockDevice.feature_info = device.feature_info;
+        existingDevice.ttlockDevice.last_seen = device.last_seen;
+        existingDevice.ttlockDevice.offline = device.offline;
+        if (comingOnline) {
           this.log.debug(`Device [${device.sys_info.device_id}] was offline and is now online. Updating and starting polling.`);
-          existingDevice.ttlockDevice = device;
-          existingDevice.updateAfterPeriodicDiscovery();
+          existingDevice.updateAfterPeriodicDiscovery(true);
           existingDevice.startPolling();
         } else {
           this.log.debug(`Updating existing HomeKit device [${device.sys_info.device_id}].`);
-          existingDevice.ttlockDevice = device;
           existingDevice.updateAfterPeriodicDiscovery();
         }
       } else {
@@ -367,8 +374,14 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     lastSeen: Date,
     offline: boolean,
   ): void {
+    const offlineStatusChanged = accessory.context.offline !== offline;
+
     accessory.context.lastSeen = lastSeen;
     accessory.context.offline = offline;
+
+    if (offlineStatusChanged) {
+      this.api.updatePlatformAccessories([accessory]);
+    }
   }
 
   private async startTTLockApi(): Promise<void> {
@@ -386,6 +399,15 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private stopTTLockApi(): void {
     this.log.debug('Stopping TTLock API');
 
+    if (this.usageTracker) {
+      if (this.usageTierChangedHandler) {
+        this.usageTracker.off('tierChanged', this.usageTierChangedHandler);
+        this.usageTierChangedHandler = undefined;
+      }
+      this.usageTracker.stop();
+      this.usageTracker = undefined;
+    }
+
     if (this.ttLockApi) {
       this.log.debug('TTLock API process found, attempting to kill the process');
       this.ttLockApi = undefined;
@@ -402,13 +424,15 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       this.usageTracker = new UsageTracker(this.api, this.log, this.config.totalApiCallsPerMonth);
       await this.usageTracker.init();
       this.log.debug('UsageTracker initialized');
-      this.usageTracker.on('tierChanged', () => {
+      this.usageTierChangedHandler = () => {
         this.log.info('API usage tier changed — recalculating polling intervals...');
         void this.reschedulePolling();
-      });
+      };
+      this.usageTracker.on('tierChanged', this.usageTierChangedHandler);
     } catch (err) {
       this.log.error('Failed to initialize usage tracker', err);
       this.usageTracker = undefined;
+      this.usageTierChangedHandler = undefined;
     }
 
     this.log.debug('Initializing TTLockApi...');
@@ -499,12 +523,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     if (!this.configuredAccessories.has(accessory.UUID)) {
       this.log.debug(`Platform Accessory ${accessory.displayName} is not in configuredAccessories, adding it.`);
       this.configuredAccessories.set(accessory.UUID, accessory);
+      this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      this.log.debug(`Platform Accessory ${accessory.displayName} registered with Homebridge.`);
     } else {
       this.log.debug(`Platform Accessory ${accessory.displayName} is already in configuredAccessories.`);
     }
-
-    this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-    this.log.debug(`Platform Accessory ${accessory.displayName} registered with Homebridge.`);
   }
 
   configureAccessory(accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>): void {

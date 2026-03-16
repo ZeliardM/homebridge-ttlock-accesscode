@@ -1,6 +1,5 @@
 import type { Characteristic, CharacteristicValue, WithUUID } from 'homebridge';
 
-import type HomeKitDevice from './baseDevice.js';
 import type TTLockAccessCodePlatform from '../platform.js';
 
 export type TTLockDevice = Lock;
@@ -38,7 +37,8 @@ export interface Passcode {
 
 export interface DescriptorContext {
   platform: TTLockAccessCodePlatform;
-  device: HomeKitDevice;
+  device: SysInfo;
+  alias: string;
 }
 
 export interface CharacteristicDescriptor {
@@ -46,7 +46,9 @@ export interface CharacteristicDescriptor {
   name?: string;
   writable?: boolean;
   syncGroup?: string;
-  getInitial(context?: DescriptorContext): CharacteristicValue;
-  getCurrent(context?: DescriptorContext): CharacteristicValue;
+  debouncePolls?: number;
+  syncHomeKitValueAfterSet?: boolean;
+  getInitial(context: DescriptorContext): CharacteristicValue;
+  getCurrent(context: DescriptorContext): CharacteristicValue;
   applySet?(value: CharacteristicValue, context: DescriptorContext): Promise<void | string>;
 }

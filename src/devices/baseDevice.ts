@@ -30,11 +30,12 @@ export default abstract class HomeKitDevice {
   protected deviceManager: DeviceManager | undefined;
   public homebridgeAccessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>;
   public isUpdating = false;
-  protected previousSnapshot?: HomeKitDevice;
+  protected previousSnapshot?: TTLockDevice;
   protected pollingInterval?: NodeJS.Timeout;
   protected updateEmitter = new EventEmitter();
 
   private static locks: Map<string, Promise<unknown>> = new Map();
+  private pendingChanges: Map<string, { pendingValue: CharacteristicValue; count: number }> = new Map();
 
   protected getSysInfoDeferred: () => Promise<void>;
 
@@ -64,10 +65,10 @@ export default abstract class HomeKitDevice {
       this.platform.config.advancedOptions.waitTimeUpdate,
     );
 
-    if (this.previousSnapshot) {
-      this.previousSnapshot.ttlockDevice = JSON.parse(JSON.stringify(this.ttlockDevice));
-    } else {
-      this.previousSnapshot = Object.create(this);
+    try {
+      this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
+    } catch {
+      this.previousSnapshot = { ...this.ttlockDevice };
     }
   }
 
@@ -94,12 +95,23 @@ export default abstract class HomeKitDevice {
   }
 
   private updateAccessory(accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>): void {
-    accessory.displayName = this.name;
+    const currentDisplayName = accessory.displayName;
+    const deviceName = this.name;
+    let displayNameChanged = false;
+
+    if (!currentDisplayName && deviceName) {
+      accessory.displayName = deviceName;
+      displayNameChanged = true;
+    }
+
     accessory.context.deviceId = this.id;
     accessory.context.lastSeen = this.ttlockDevice.last_seen;
     accessory.context.offline = this.ttlockDevice.offline;
     this.platform.configuredAccessories.set(accessory.UUID, accessory);
-    this.platform.api.updatePlatformAccessories([accessory]);
+
+    if (displayNameChanged) {
+      this.platform.api.updatePlatformAccessories([accessory]);
+    }
   }
 
   get id(): string {
@@ -179,22 +191,15 @@ export default abstract class HomeKitDevice {
       this.log.warn('No device_id in sys_info');
       return;
     }
-    try {
-      this.previousSnapshot!.ttlockDevice = JSON.parse(JSON.stringify(this.ttlockDevice));
-      const updatedSysInfo = await this.deviceManager.getSysInfo(deviceId);
-      if (!updatedSysInfo) {
-        this.log.warn('getSysInfo returned undefined');
-        return;
-      }
-      this.ttlockDevice.sys_info.battery = updatedSysInfo.battery!;
-      this.ttlockDevice.sys_info.state = updatedSysInfo.state!;
-      this.log.debug(`Updated sys_info: ${updatedSysInfo.alias ?? deviceId}`);
-    } catch (error) {
-      this.log.error('Error updating sys_info', error);
+    const updatedSysInfo = await this.deviceManager.getSysInfo(deviceId);
+    if (!updatedSysInfo) {
+      throw new Error(`No sys_info returned for ${deviceId}. Marking offline and stopping polling.`);
     }
+    Object.assign(this.ttlockDevice.sys_info, updatedSysInfo);
+    this.log.debug(`Updated sys_info: ${updatedSysInfo.alias ?? deviceId}`);
   }
 
-  protected async refreshAndUpdateCharacteristics(forceUpdate: boolean): Promise<void> {
+  protected async refreshAndUpdateCharacteristics(forceUpdate: boolean, skipFetch = false): Promise<void> {
     const deviceKey = this.ttlockDevice.sys_info.device_id;
     if (!forceUpdate && HomeKitDevice.locks.has(deviceKey)) {
       this.log.debug('Skipping poll; active update lock');
@@ -210,10 +215,17 @@ export default abstract class HomeKitDevice {
       }
       this.isUpdating = true;
       try {
-        await this.getSysInfo();
+        if (!skipFetch) {
+          await this.getSysInfo();
+        }
         await this.updateAllServicesAndCharacteristics(forceUpdate);
+        this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
       } catch (error) {
-        this.log.error('Error during poll update:', error);
+        if (error instanceof Error && error.message.startsWith('No sys_info returned for ')) {
+          this.log.warn(`Poll update failed: ${error.message}`);
+        } else {
+          this.log.error('Error during poll update:', error);
+        }
         this.ttlockDevice.offline = true;
         await this.stopPolling();
       } finally {
@@ -241,21 +253,20 @@ export default abstract class HomeKitDevice {
     );
   }
 
-  public async stopPolling(): Promise<void> {
+  public async stopPolling(waitForCurrentUpdate = false): Promise<void> {
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
       this.pollingInterval = undefined;
     }
-    if (this.isUpdating) {
+    if (waitForCurrentUpdate && this.isUpdating) {
       await new Promise<void>(resolve => {
-        this.isUpdating = false;
         this.updateEmitter.once('updateComplete', resolve);
       });
     }
   }
 
-  public updateAfterPeriodicDiscovery(): void {
-    void this.refreshAndUpdateCharacteristics(true);
+  public updateAfterPeriodicDiscovery(force = false): void {
+    void this.refreshAndUpdateCharacteristics(force, true);
   }
 
   protected setupServices(): void {
@@ -273,7 +284,6 @@ export default abstract class HomeKitDevice {
           () => this.genericOnGet(service, descriptor),
           descriptor.writable ? (value: CharacteristicValue) => this.genericOnSet(service, descriptor, value) : undefined,
         );
-        this.initializeCharacteristic(service, descriptor);
       }
       this.services.push({ serviceType, service, descriptors });
     }
@@ -301,31 +311,24 @@ export default abstract class HomeKitDevice {
     }
   }
 
-  protected initializeCharacteristic(
-    service: Service,
-    descriptor: CharacteristicDescriptor,
-  ): void {
-    const context = this.buildDescriptorContext();
-    const initial = descriptor.getInitial(context);
-    const characteristic = service.getCharacteristic(descriptor.type);
-    characteristic.updateValue(initial);
-  }
-
   protected buildDescriptorContext(): DescriptorContext {
     return {
       platform: this.platform,
-      device: this,
+      device: this.ttlockDevice.sys_info,
+      alias: this.name,
     };
   }
 
-  public updateDeviceField<K extends keyof SysInfo>(key: K, value: SysInfo[K]): void {
-    (this.ttlockDevice.sys_info as SysInfo)[key] = value;
-  }
-
   private async genericOnGet(service: Service, descriptor: CharacteristicDescriptor): Promise<CharacteristicValue> {
+    const context = this.buildDescriptorContext();
     try {
       const characteristic = service.getCharacteristic(descriptor.type);
-      return characteristic.value!;
+      let value = characteristic.value;
+      if (value === undefined || value === null) {
+        value = descriptor.getInitial(context);
+        characteristic.updateValue(value);
+      }
+      return value as CharacteristicValue;
     } catch (error) {
       this.log.error(`OnGet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
       this.ttlockDevice.offline = true;
@@ -363,28 +366,30 @@ export default abstract class HomeKitDevice {
         this.isUpdating = true;
         const result = await descriptor.applySet!(value, context);
         let postSetValue: CharacteristicValue;
-        this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
         let descriptorsToUpdate: CharacteristicDescriptor[] = [];
-        if (result !== undefined) {
-          return result;
+        if (descriptor.syncGroup) {
+          descriptorsToUpdate = this.services
+            .find(entry => entry.service === service)!
+            .descriptors.filter(d => d.syncGroup === descriptor.syncGroup);
         } else {
-          if (descriptor.syncGroup) {
-            descriptorsToUpdate = this.services
-              .find(entry => entry.service === service)!
-              .descriptors.filter(d => d.syncGroup === descriptor.syncGroup);
-          } else {
-            descriptorsToUpdate = [descriptor];
-          }
+          descriptorsToUpdate = [descriptor];
         }
         for (const desc of descriptorsToUpdate) {
           postSetValue = desc.getCurrent(context);
-          this.updateValue(
-            service,
-            service.getCharacteristic(desc.type),
-            context.device.name,
-            postSetValue,
-          );
+          const characteristic = service.getCharacteristic(desc.type);
+          if (desc.syncHomeKitValueAfterSet) {
+            this.updateValue(
+              service,
+              characteristic,
+              context.alias,
+              postSetValue,
+            );
+          } else {
+            this.log.info(`Set ${this.platform.lsc(service, characteristic)} on ${context.alias} to ${postSetValue}`);
+          }
         }
+        this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
+        return result;
       } catch (error) {
         this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
         this.ttlockDevice.offline = true;
@@ -403,25 +408,81 @@ export default abstract class HomeKitDevice {
         try {
           const previousContext: DescriptorContext = {
             platform: this.platform,
-            device: this.previousSnapshot!,
+            device: (this.previousSnapshot?.sys_info as SysInfo) ?? {} as SysInfo,
+            alias: this.name,
           };
 
-          const previousValue = descriptor.getCurrent(previousContext);
-          const nextValue = descriptor.getCurrent(context);
-          this.updateIfChanged(
-            entry.service,
-            entry.service.getCharacteristic(descriptor.type),
-            context.device.name,
-            previousValue as CharacteristicValue,
-            nextValue as CharacteristicValue,
-            descriptor.name,
-            forceUpdate,
-          );
+          const characteristic = entry.service.getCharacteristic(descriptor.type);
+          if (descriptor.debouncePolls && descriptor.debouncePolls > 1) {
+            const hkValue: CharacteristicValue = characteristic.value !== null && characteristic.value !== undefined
+              ? characteristic.value as CharacteristicValue
+              : descriptor.getInitial(context) as CharacteristicValue;
+            const nextDeviceValue = descriptor.getCurrent(context) as CharacteristicValue;
+            const debounceKey = `${entry.service.UUID}:${descriptor.type.UUID}`;
+            const effectiveNext = this.resolveWithDebounce(
+              debounceKey,
+              hkValue,
+              nextDeviceValue,
+              descriptor.debouncePolls,
+              forceUpdate,
+            );
+            this.updateIfChanged(
+              entry.service,
+              characteristic,
+              context.alias,
+              hkValue,
+              effectiveNext,
+              descriptor.name,
+              forceUpdate,
+            );
+          } else {
+            const previousValue = this.previousSnapshot
+              ? descriptor.getCurrent(previousContext)
+              : descriptor.getInitial(context);
+            const nextValue = descriptor.getCurrent(context);
+            this.updateIfChanged(
+              entry.service,
+              characteristic,
+              context.alias,
+              previousValue as CharacteristicValue,
+              nextValue as CharacteristicValue,
+              descriptor.name,
+              forceUpdate,
+            );
+          }
         } catch (error) {
           this.log.error(`Update diff error for ${descriptor.name ?? descriptor.type.UUID}`, error);
         }
       }
     }
+  }
+
+  protected resolveWithDebounce(
+    key: string,
+    currentHomeKitValue: CharacteristicValue,
+    nextDeviceValue: CharacteristicValue,
+    debouncePolls: number,
+    force = false,
+  ): CharacteristicValue {
+    if (force) {
+      this.pendingChanges.delete(key);
+      return nextDeviceValue;
+    }
+    if (currentHomeKitValue === nextDeviceValue) {
+      this.pendingChanges.delete(key);
+      return nextDeviceValue;
+    }
+    const pending = this.pendingChanges.get(key);
+    if (pending && pending.pendingValue === nextDeviceValue) {
+      pending.count++;
+      if (pending.count >= debouncePolls) {
+        this.pendingChanges.delete(key);
+        return nextDeviceValue;
+      }
+      return currentHomeKitValue;
+    }
+    this.pendingChanges.set(key, { pendingValue: nextDeviceValue, count: 1 });
+    return currentHomeKitValue;
   }
 
   protected defaultValueForCharacteristic(type: WithUUID<new () => Characteristic>): CharacteristicValue {

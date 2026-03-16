@@ -14,6 +14,8 @@ import type { CharacteristicDescriptor, Lock, Passcode, SysInfo } from './device
 
 const { TlvFactory } = pkg;
 
+class AccessCodeProtocolError extends Error {}
+
 export default class HomeKitDeviceLock extends HomeKitDevice {
   private hasPasscode: boolean;
   private lockBusy = false;
@@ -45,7 +47,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       return buildLockDescriptors(
         C,
         async (value, context) => {
-          await this.deviceManager!.controlDevice(context.device.id, 'state', value);
+          await this.deviceManager!.controlDevice(context.device.device_id, 'state', value);
         },
       );
     }
@@ -57,7 +59,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
         C,
         () => this.getAccessCodeSupportedConfiguration(),
         async (value, context) => {
-          return await this.setAccessCodeControlPoint(context.device.ttlockDevice.sys_info, value);
+          return await this.setAccessCodeControlPoint(context.device, value);
         },
         () => this.getConfigurationState(),
       );
@@ -80,148 +82,209 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     return Buffer.concat(tlvBuffer).toString('base64') ?? 'AQEBAgEGAwEJBAEK';
   }
 
-  private async setAccessCodeControlPoint(device: SysInfo, value: CharacteristicValue): Promise<string> {
-    try {
-      this.lockBusy = true;
-      this.isUpdating = true;
+  private getAccessCodeService(): Service | undefined {
+    return this.homebridgeAccessory.getService(this.platform.Service.AccessCode) ?? undefined;
+  }
 
+  private setLockBusy(busy: boolean): void {
+    this.lockBusy = busy;
+    const accessCodeService = this.getAccessCodeService();
+    if (accessCodeService) {
+      accessCodeService
+        .getCharacteristic(this.platform.Characteristic.ConfigurationState)
+        .updateValue(this.getConfigurationState());
+    }
+  }
+
+  private async ensurePasscodesLoaded(device: SysInfo): Promise<Passcode[]> {
+    if (Array.isArray(device.passcodes)) {
+      return device.passcodes;
+    }
+    device.passcodes = await this.deviceManager!.managePasscodes(device.device_id, 'get') as Passcode[];
+    return device.passcodes;
+  }
+
+  private async refreshPasscodes(device: SysInfo): Promise<Passcode[]> {
+    device.passcodes = await this.deviceManager!.managePasscodes(device.device_id, 'get') as Passcode[];
+    return device.passcodes;
+  }
+
+  private getPasscodeIdentifier(passcode: Passcode): bigint {
+    return BigInt(passcode.index);
+  }
+
+  private encodePasscodeIdentifier(identifier: bigint): string {
+    let hex = identifier.toString(16);
+    if (hex.length % 2 !== 0) {
+      hex = `0${hex}`;
+    }
+    return hex;
+  }
+
+  private findPasscodeByIdentifier(passcodes: Passcode[], identifier: bigint): Passcode | undefined {
+    return passcodes.find(passcode => this.getPasscodeIdentifier(passcode) === identifier);
+  }
+
+  private buildPasscodeResponseRecord(passcode: Passcode): string {
+    const identifierValue = this.encodePasscodeIdentifier(this.getPasscodeIdentifier(passcode));
+    const identifier = TlvFactory.serialize(
+      TlvFactory.primitiveTlv('01', identifierValue),
+    ).toString('hex');
+    const accessCode = TlvFactory.serialize(
+      TlvFactory.primitiveTlv('02', Buffer.from(passcode.passcode).toString('hex')),
+    ).toString('hex');
+    const flags = TlvFactory.serialize(TlvFactory.primitiveTlv('03', '00')).toString('hex');
+    const status = TlvFactory.serialize(TlvFactory.primitiveTlv('04', '00')).toString('hex');
+    return TlvFactory.serialize(
+      TlvFactory.primitiveTlv('03', identifier + accessCode + flags + status),
+    ).toString('hex');
+  }
+
+  private parseOperationType(decodedTlv: Array<{ value: Buffer }>): number {
+    if (decodedTlv.length === 0) {
+      throw new AccessCodeProtocolError('Empty AccessCodeControlPoint request');
+    }
+    return Number(decodedTlv[0].value.toString('hex'));
+  }
+
+  private parseIdentifierRequest(element: { value: Buffer }, requestType: string): bigint {
+    const request = TlvFactory.parse(element.value);
+    if (request.length === 0) {
+      throw new AccessCodeProtocolError(`${requestType} request is missing its passcode index`);
+    }
+    const identifier = request[0].value.toString('hex');
+    if (!identifier) {
+      throw new AccessCodeProtocolError(`${requestType} request contained an empty passcode index`);
+    }
+    return BigInt(`0x${identifier}`);
+  }
+
+  private parsePasscodeRequest(element: { value: Buffer }): string {
+    const request = TlvFactory.parse(element.value);
+    if (request.length === 0) {
+      throw new AccessCodeProtocolError('Add request is missing the passcode payload');
+    }
+    return request[0].value.toString();
+  }
+
+  private async buildListResponse(device: SysInfo): Promise<string> {
+    const passcodes = await this.ensurePasscodesLoaded(device);
+    const records = passcodes.map(passcode => {
+      this.log.debug(`Passcode ${passcode.passcode} found on ${this.name}`);
+      return this.buildPasscodeResponseRecord(passcode);
+    });
+    return `010101${records.join('0000')}`;
+  }
+
+  private async buildReadResponse(
+    device: SysInfo,
+    decodedTlv: Array<{ value: Buffer }>,
+  ): Promise<string> {
+    const passcodes = await this.ensurePasscodesLoaded(device);
+    const records = decodedTlv.slice(1).map((element) => {
+      const passcodeIdentifier = this.parseIdentifierRequest(element, 'Read');
+      const passcode = this.findPasscodeByIdentifier(passcodes, passcodeIdentifier);
+      if (!passcode) {
+        throw new AccessCodeProtocolError(`Passcode identifier ${passcodeIdentifier.toString()} was not found for read`);
+      }
+      this.log.debug(`Reading passcode ${passcode.passcode} on ${this.name}`);
+      return this.buildPasscodeResponseRecord(passcode);
+    });
+    return `010102${records.join('0000')}`;
+  }
+
+  private async buildAddResponse(
+    device: SysInfo,
+    decodedTlv: Array<{ value: Buffer }>,
+  ): Promise<string> {
+    const records: string[] = [];
+    for (const element of decodedTlv.slice(1)) {
+      const newPassCode = this.parsePasscodeRequest(element);
+      const cachedPasscodes = await this.ensurePasscodesLoaded(device);
+      let passcode = cachedPasscodes.find(existing => existing.passcode === newPassCode);
+      if (!passcode) {
+        this.log.info(`Adding new passcode ${newPassCode} to ${this.name}`);
+        const newPasscode = await this.deviceManager!
+          .managePasscodes(device.device_id, 'add', newPassCode) as { keyboardPwdId: string };
+        const refreshedPasscodes = await this.refreshPasscodes(device);
+        passcode = refreshedPasscodes.find(existing =>
+          existing.passcode_id === newPasscode.keyboardPwdId.toString()
+          || existing.passcode === newPassCode,
+        );
+      } else {
+        this.log.debug(`Passcode ${newPassCode} already exists on ${this.name}`);
+      }
+      if (!passcode) {
+        throw new AccessCodeProtocolError(`Passcode ${newPassCode} was not available after add`);
+      }
+      records.push(this.buildPasscodeResponseRecord(passcode));
+    }
+    return `010103${records.join('0000')}`;
+  }
+
+  private async buildDeleteResponse(
+    device: SysInfo,
+    decodedTlv: Array<{ value: Buffer }>,
+  ): Promise<string> {
+    if (decodedTlv.length < 2) {
+      throw new AccessCodeProtocolError('Delete request is missing the target passcode index');
+    }
+    const passcodes = await this.ensurePasscodesLoaded(device);
+    const deletePasscodeIdentifier = this.parseIdentifierRequest(decodedTlv[1], 'Delete');
+    const passcode = this.findPasscodeByIdentifier(passcodes, deletePasscodeIdentifier);
+    if (!passcode) {
+      throw new AccessCodeProtocolError(`Passcode identifier ${deletePasscodeIdentifier.toString()} was not found for delete`);
+    }
+    this.log.info(`Deleting passcode ${passcode.passcode} on ${this.name}`);
+    await this.deviceManager!.managePasscodes(device.device_id, 'delete', passcode.passcode_id);
+    await this.refreshPasscodes(device);
+    return `010105${this.buildPasscodeResponseRecord(passcode)}`;
+  }
+
+  private async setAccessCodeControlPoint(device: SysInfo, value: CharacteristicValue): Promise<string> {
+    this.setLockBusy(true);
+    try {
       const decodedTlv = TlvFactory.parse(Buffer.from(String(value), 'base64').toString('hex'));
       this.log.debug(`Decoded TLV for AccessCodeControlPoint on ${this.name}:`, decodedTlv);
 
-      let responseTlv = '';
-      let response = '';
       let requestType = '';
-      let identifier = '', accessCode = '', flags = '', status = '';
+      let responseTlv = '';
 
-      switch (Number(decodedTlv[0].value.toString('hex'))) {
+      switch (this.parseOperationType(decodedTlv)) {
         case 1: {
           requestType = 'List';
-          responseTlv = '010101';
-          device.passcodes!.forEach((pc, index) => {
-            identifier = TlvFactory.serialize(TlvFactory.primitiveTlv('01', String(pc.index).padStart(2, '0'))).toString('hex');
-            accessCode = TlvFactory.serialize(
-              TlvFactory.primitiveTlv('02', Buffer.from(pc.passcode).toString('hex')),
-            ).toString('hex');
-            flags = TlvFactory.serialize(TlvFactory.primitiveTlv('03', '00')).toString('hex');
-            status = TlvFactory.serialize(TlvFactory.primitiveTlv('04', '00')).toString('hex');
-            this.log.debug(`Passcode ${pc.passcode} found on ${this.name}`);
-            responseTlv += TlvFactory.serialize(
-              TlvFactory.primitiveTlv('03', identifier + accessCode + flags + status),
-            ).toString('hex') + (index !== (device.passcodes!.length - 1) ? '0000' : '');
-          });
-          response = Buffer.from(responseTlv, 'hex').toString('base64');
+          responseTlv = await this.buildListResponse(device);
           break;
         }
         case 2: {
           requestType = 'Read';
-          responseTlv = '010102';
-          if (device.passcodes!.length > 0) {
-            for (let index = 1; index < decodedTlv.length; ++index) {
-              const element = decodedTlv[index];
-              const readReq = TlvFactory.parse(element.value);
-              if (readReq.length > 0) {
-                const passcodeIndexHex = readReq[0].value.toString('hex');
-                const passcodeIndex = parseInt(passcodeIndexHex, 16);
-                const pc = device.passcodes![passcodeIndex];
-                if (pc) {
-                  this.log.debug(`Reading passcode ${pc.passcode} on ${this.name}`);
-                  identifier = TlvFactory.serialize(TlvFactory.primitiveTlv('01', String(pc.index).padStart(2, '0'))).toString('hex');
-                  accessCode = TlvFactory.serialize(
-                    TlvFactory.primitiveTlv('02', Buffer.from(pc.passcode).toString('hex')),
-                  ).toString('hex');
-                  flags = TlvFactory.serialize(TlvFactory.primitiveTlv('03', '00')).toString('hex');
-                  status = TlvFactory.serialize(TlvFactory.primitiveTlv('04', '00')).toString('hex');
-                }
-              }
-              responseTlv += TlvFactory.serialize(
-                TlvFactory.primitiveTlv('03', identifier + accessCode + flags + status),
-              ).toString('hex') + (index !== (decodedTlv.length - 1) ? '0000' : '');
-            }
-          }
-          response = Buffer.from(responseTlv, 'hex').toString('base64');
+          responseTlv = await this.buildReadResponse(device, decodedTlv);
           break;
         }
         case 3: {
           requestType = 'Add';
-          responseTlv = '010103';
-          for (let index = 1; index < decodedTlv.length; index++) {
-            const addReq = TlvFactory.parse(decodedTlv[index].value);
-            if (addReq.length > 0) {
-              const newPassCodeHex = addReq[0];
-              const newPassCode = newPassCodeHex.value.toString();
-              let pc: Passcode | undefined = device.passcodes!.find(p => p.passcode === newPassCode);
-              if (!pc) {
-                this.log.info(`Adding new passcode ${newPassCode} to ${this.name}`);
-                try {
-                  const newPc = await this.deviceManager!
-                    .managePasscodes(device.device_id, 'add', newPassCode) as { keyboardPwdId: string };
-                  device.passcodes! = await this.deviceManager!.managePasscodes(device.device_id, 'get') as Passcode[];
-                  pc = device.passcodes!.find(
-                    (p: Passcode) =>
-                      p.passcode_id === newPc.keyboardPwdId.toString() ||
-                      p.passcode === newPassCode,
-                  );
-                } catch (err) {
-                  this.log.error(`Failed to add passcode ${newPassCode} to ${this.name}`, err);
-                }
-              } else {
-                this.log.debug(`Passcode ${newPassCode} already exists on ${this.name}`);
-              }
-              if (pc) {
-                identifier = TlvFactory.serialize(TlvFactory.primitiveTlv('01', String(pc.index).padStart(2, '0'))).toString('hex');
-                accessCode = TlvFactory.serialize(
-                  TlvFactory.primitiveTlv('02', Buffer.from(pc.passcode).toString('hex')),
-                ).toString('hex');
-                flags = TlvFactory.serialize(TlvFactory.primitiveTlv('03', '00')).toString('hex');
-                status = TlvFactory.serialize(TlvFactory.primitiveTlv('04', '00')).toString('hex');
-                responseTlv += TlvFactory.serialize(
-                  TlvFactory.primitiveTlv('03', identifier + accessCode + flags + status),
-                ).toString('hex') + (index !== (decodedTlv.length - 1) ? '0000' : '');
-              }
-            }
-          }
-          response = Buffer.from(responseTlv, 'hex').toString('base64');
+          responseTlv = await this.buildAddResponse(device, decodedTlv);
           break;
         }
         case 5: {
           requestType = 'Delete';
-          responseTlv = '010105';
-          const deleteReq = TlvFactory.parse(decodedTlv[1].value);
-          if (deleteReq.length > 0) {
-            const deletePassCodeIndexHex = deleteReq[0].value.toString('hex');
-            const deletePassCodeIndex = parseInt(deletePassCodeIndexHex, 16);
-            const pc = device.passcodes![deletePassCodeIndex];
-            if (pc) {
-              this.log.info(`Deleting passcode ${pc.passcode} on ${this.name}`);
-              await this.deviceManager!.managePasscodes(device.device_id, 'delete', pc.passcode_id);
-              device.passcodes! = await this.deviceManager!.managePasscodes(device.device_id, 'get') as Passcode[];
-              identifier = TlvFactory.serialize(TlvFactory.primitiveTlv('01', String(pc.index).padStart(2, '0'))).toString('hex');
-              accessCode = TlvFactory.serialize(
-                TlvFactory.primitiveTlv('02', Buffer.from(pc.passcode).toString('hex')),
-              ).toString('hex');
-              flags = TlvFactory.serialize(TlvFactory.primitiveTlv('03', '00')).toString('hex');
-              status = TlvFactory.serialize(TlvFactory.primitiveTlv('04', '00')).toString('hex');
-              responseTlv += TlvFactory.serialize(
-                TlvFactory.primitiveTlv('03', identifier + accessCode + flags + status),
-              ).toString('hex');
-            }
-          }
-          response = Buffer.from(responseTlv, 'hex').toString('base64');
+          responseTlv = await this.buildDeleteResponse(device, decodedTlv);
           break;
         }
+        default:
+          throw new AccessCodeProtocolError(`Unsupported AccessCodeControlPoint operation: ${this.parseOperationType(decodedTlv)}`);
       }
 
       this.log.info(`Access Code Control ${requestType} Request completed for ${this.name}`);
-      return response;
+      return Buffer.from(responseTlv, 'hex').toString('base64');
     } catch (error) {
-      this.log.error('Error processing AccessCodeControlPoint', error);
-      this.ttlockDevice.offline = true;
-      await this.stopPolling();
-      return '';
+      if (error instanceof AccessCodeProtocolError) {
+        this.log.warn(`Invalid AccessCodeControlPoint request on ${this.name}: ${error.message}`);
+        return '';
+      }
+      throw error;
     } finally {
-      this.lockBusy = false;
-      this.isUpdating = false;
-      this.updateEmitter.emit('updateComplete');
+      this.setLockBusy(false);
     }
   }
 
