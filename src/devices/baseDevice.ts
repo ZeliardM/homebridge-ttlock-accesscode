@@ -556,10 +556,15 @@ export default abstract class HomeKitDevice {
     label?: string,
     force = false,
   ): void {
-    const needsInit = characteristic.value === undefined || characteristic.value === null;
-    if (force || needsInit || previousValue !== nextValue) {
+    const currentValue = characteristic.value as Nullable<CharacteristicValue>;
+    const needsInit = currentValue === undefined || currentValue === null;
+    const homeKitValueChanged = needsInit || currentValue !== nextValue;
+    const snapshotChanged = previousValue !== nextValue;
+    const shouldUpdate = homeKitValueChanged && (force || needsInit || snapshotChanged);
+
+    if (shouldUpdate) {
       if (label) {
-        this.log.debug(`[${alias}] Updating ${label}: ${previousValue} → ${nextValue}`);
+        this.log.debug(`Updating ${label}: ${previousValue} → ${nextValue}`);
       }
       this.updateValue(service, characteristic, alias, nextValue as unknown as Nullable<CharacteristicValue>);
     }
