@@ -299,6 +299,7 @@ export default abstract class HomeKitDevice {
           () => this.genericOnGet(service, descriptor),
           descriptor.writable ? (value: CharacteristicValue) => this.genericOnSet(service, descriptor, value) : undefined,
         );
+        this.seedCharacteristicValue(service, descriptor, this.buildDescriptorContext(), 'Seed error');
       }
       this.services.push({ serviceType, service, descriptors });
     }
@@ -323,6 +324,20 @@ export default abstract class HomeKitDevice {
     characteristic.onGet(onGet);
     if (onSet) {
       characteristic.onSet(onSet);
+    }
+  }
+
+  protected seedCharacteristicValue(
+    service: Service,
+    descriptor: CharacteristicDescriptor,
+    context: DescriptorContext,
+    errorPrefix: string,
+  ): void {
+    try {
+      const characteristic = service.getCharacteristic(descriptor.type);
+      characteristic.updateValue(descriptor.getInitial(context));
+    } catch (error) {
+      this.log.error(`${errorPrefix} for ${descriptor.name ?? descriptor.type.UUID}`, error);
     }
   }
 
