@@ -54,6 +54,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   public taskQueue: TaskQueue;
   private readonly homekitDevicesById: Map<string, HomeKitDevice> = new Map();
   private deviceDiscoveredHandler?: (device: TTLockDevice) => Promise<void>;
+  private discoveryInterval?: NodeJS.Timeout;
   private platformInitialization: Promise<void>;
   private usageTierChangedHandler?: () => void;
 
@@ -85,6 +86,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       if (!this.isShuttingDown) {
         this.isShuttingDown = true;
       }
+      if (this.discoveryInterval) {
+        clearInterval(this.discoveryInterval);
+        this.log.debug('Cleared periodic device discovery interval');
+      }
       if (this.deviceDiscoveredHandler) {
         deviceEventEmitter.off('deviceDiscovered', this.deviceDiscoveredHandler);
       }
@@ -98,7 +103,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       } catch (error) {
         this.log.error('Error while waiting for task queue to empty during shutdown:', error);
       }
-      this.stopTTLockApi();
+      await this.stopTTLockApi();
     });
   }
 
@@ -225,7 +230,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
     const deferredDiscoveryTask = deferAndCombine(discoveryTask, this.config.advancedOptions.waitTimeUpdate);
 
-    setInterval(() => {
+    this.discoveryInterval = setInterval(() => {
       try {
         this.taskQueue.addTask(deferredDiscoveryTask);
       } catch (error) {
@@ -423,13 +428,13 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       await this.createAndAuthenticateApi();
       this.log.debug('TTLock API process started successfully');
     } catch (error) {
-      this.stopTTLockApi();
+      await this.stopTTLockApi();
       this.log.error(`Error starting TTLock API process: ${error instanceof Error ? error.message : 'Unknown error'}`);
       throw error;
     }
   }
 
-  private stopTTLockApi(): void {
+  private async stopTTLockApi(): Promise<void> {
     this.log.debug('Stopping TTLock API');
 
     if (this.usageTracker) {
@@ -437,7 +442,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.usageTracker.off('tierChanged', this.usageTierChangedHandler);
         this.usageTierChangedHandler = undefined;
       }
-      this.usageTracker.stop();
+      await this.usageTracker.stop();
       this.usageTracker = undefined;
     }
 

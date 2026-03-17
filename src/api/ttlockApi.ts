@@ -305,7 +305,6 @@ export class TTLockApi {
           continue;
         }
 
-        // For expected gateway-offline responses, prefer logging at the higher-context caller level.
         if (!this.isGatewayOfflineError(normalized)) {
           this.logApiError(`Request failed for ${endpoint}`, normalized);
         }

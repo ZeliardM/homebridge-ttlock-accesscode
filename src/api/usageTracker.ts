@@ -293,9 +293,15 @@ export class UsageTracker extends EventEmitter {
     }
   }
 
-  public stop(): void {
-    if (this.rolloverInterval) {
-      clearInterval(this.rolloverInterval);
+  public async stop(): Promise<void> {
+    const release = await this.mutex.acquire();
+    try {
+      await this.persist();
+      if (this.rolloverInterval) {
+        clearInterval(this.rolloverInterval);
+      }
+    } finally {
+      release();
     }
   }
 }
