@@ -1,6 +1,6 @@
 # Changelog
 
-## [v2.0.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0)
+## [v2.0.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0) (2026-03-17)
 
 ### Breaking Changes
 
@@ -22,6 +22,7 @@
 
 ### Other Changes
 
+- Update CHANGELOG.md for release v2.0.0 [release] (@github-actions)
 - [other] Update workflows and scripts [a5130c8](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/a5130c8c164f2e8db4962cd4871f0e7543ae953a) (@ZeliardM)
 - [other] Update dependencies and README.md [7c3a940](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/7c3a940bed240a05396f4a40d7140b8b2e0b722d) (@ZeliardM)
 - [other] Dependency clean-up [0439186](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/0439186d92ec49c4fb601e727c808b0f67519d07) (@ZeliardM)
