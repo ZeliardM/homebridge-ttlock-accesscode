@@ -5,8 +5,33 @@ import type {
   Logging,
 } from 'homebridge';
 
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+export class SimpleMutex {
+  private _locked = false;
+  private _waiting: Array<() => void> = [];
+
+  async acquire(): Promise<() => void> {
+    while (this._locked) {
+      await new Promise<void>(resolve => this._waiting.push(resolve));
+    }
+    this._locked = true;
+    return () => {
+      this._locked = false;
+      if (this._waiting.length > 0) {
+        const next = this._waiting.shift();
+        if (next) {
+          next();
+        }
+      }
+    };
+  }
+}
+
 export function deferAndCombine<T, U>(
-  fn: (args: U[]) => Promise<T>,
+  fn: ((requestCount: number) => Promise<T>) | (() => Promise<T>),
   timeout: number,
   runNowFn?: (arg: U) => void,
 ): (arg?: U) => Promise<T> {
@@ -16,10 +41,18 @@ export function deferAndCombine<T, U>(
   const processRequests = () => {
     const currentRequests = requests;
     requests = [];
-    fn(currentRequests.map(req => req.resolve as unknown as U))
+    let result: Promise<T>;
+    if (fn.length === 0) {
+      result = (fn as () => Promise<T>)();
+    } else {
+      result = (fn as (requestCount: number) => Promise<T>)(currentRequests.length);
+    }
+    result
       .then(value => currentRequests.forEach(req => req.resolve(value)))
       .catch(error => currentRequests.forEach(req => req.reject(error)))
-      .finally(() => timer = null);
+      .finally(() => {
+        timer = null;
+      });
   };
 
   return (arg?: U) => {
@@ -41,18 +74,32 @@ export function isObjectLike(candidate: unknown): candidate is Record<string, un
   return typeof candidate === 'object' && candidate !== null || typeof candidate === 'function';
 }
 
+export async function loadPackageConfig(logger: Logging): Promise<{ name: string; version: string; engines: { node: string } }> {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const packageConfigPath = path.join(__dirname, '..', 'package.json');
+  const log: Logger = prefixLogger(logger, '[Package Config]');
+  log.debug('Loading package configuration from:', packageConfigPath);
+
+  try {
+    const packageConfigData = await fs.readFile(packageConfigPath, 'utf8');
+    return JSON.parse(packageConfigData);
+  } catch (error) {
+    log.error(`Error reading package.json: ${error}`);
+    throw error;
+  }
+}
+
 export function lookup<T>(
   object: unknown,
   compareFn: undefined | ((objectProp: unknown, search: T) => boolean),
   value: T,
-): string {
+): string | undefined {
   const compare = compareFn ?? ((objectProp: unknown, search: T): boolean => objectProp === search);
 
   if (isObjectLike(object)) {
-    const key = Object.keys(object).find(key => compare(object[key], value));
-    return key ?? ''; // Provide a default value if key is undefined
+    return Object.keys(object).find(key => compare(object[key], value));
   }
-  return '';
+  return undefined;
 }
 
 export function lookupCharacteristicNameByUUID(
@@ -81,4 +128,32 @@ export function prefixLogger(logger: Logger, prefix: string | (() => string)): L
   (clonedLogger as { prefix: string | (() => string) }).prefix = typeof logger.prefix === 'string' ? `${prefix} ${logger.prefix}` : prefix;
 
   return clonedLogger;
+}
+
+export function satisfiesVersion(currentVersion: string, requiredVersion: string): boolean {
+  const parseVersionParts = (version: string): [number, number, number] => {
+    const [major = '0', minor = '0', patch = '0'] = version.replace('^', '').replace('v', '').split('.');
+    return [Number(major) || 0, Number(minor) || 0, Number(patch) || 0];
+  };
+
+  const versions = requiredVersion.split('||').map(v => v.trim());
+  const [currentMajor, currentMinor, currentPatch] = parseVersionParts(currentVersion);
+
+  return versions.some(version => {
+    const [requiredMajor, requiredMinor, requiredPatch] = parseVersionParts(version);
+
+    if (currentMajor > requiredMajor) {
+      return true;
+    }
+    if (currentMajor < requiredMajor) {
+      return false;
+    }
+    if (currentMinor > requiredMinor) {
+      return true;
+    }
+    if (currentMinor < requiredMinor) {
+      return false;
+    }
+    return currentPatch >= requiredPatch;
+  });
 }

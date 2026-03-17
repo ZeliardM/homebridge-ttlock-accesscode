@@ -2,7 +2,7 @@
   "bridge": {
     "name": "Homebridge",
     "username": "11:22:33:AA:BB:CC",
-    "port": 51999,
+    "port": 12345,
     "pin": "001-02-003"
   },
   "description": "This is an example configuration file.",
@@ -14,11 +14,11 @@
       "clientSecret": "YourClientSecret",
       "username": "YourUsername",
       "password": "YourPassword",
-      "discoveryOptions": {
-        "pollingInterval": 5,
-        "discoveryPollingInterval": 300,
-        "offlineInterval": 7
-      }
+      "totalApiCallsPerMonth": 30000,
+      "pollingInterval": 300,
+      "discoveryPollingInterval": 12,
+      "offlineInterval": 7,
+      "waitTimeUpdate": 100
     }
   ],
   "accessories": []
