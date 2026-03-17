@@ -51,20 +51,20 @@
         "title": "Total API Calls Per Month",
         "type": "integer",
         "description": "Total number of TTLock API calls allowed per month (used to automatically adjust polling).",
-        "default": 100000,
-        "minimum": 100000
+        "default": 30000,
+        "minimum": 30000
       },
       "pollingInterval": {
         "title": "Polling Interval (seconds)",
         "type": "integer",
         "description": "How often to check device status in the background (seconds)",
-        "default": 90
+        "default": 300
       },
       "discoveryPollingInterval": {
         "title": "Discovery Polling Interval (hours)",
         "type": "integer",
         "description": "How often to discover new devices in the background (hours)",
-        "default": 6
+        "default": 12
       },
       "offlineInterval": {
         "title": "Offline Interval (days)",

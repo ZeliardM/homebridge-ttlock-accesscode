@@ -35,6 +35,7 @@ export class UsageTracker extends EventEmitter {
     const dir = path.join(base, 'ttlock-accesscode');
     await fs.mkdir(dir, { recursive: true });
     this.storageFilePath = path.join(dir, 'ttlock-accesscode-usage.json');
+    this.log.debug(`UsageTracker storage path: ${this.storageFilePath}`);
 
     await this.loadOrInit();
     this.scheduleRolloverCheck();
@@ -65,16 +66,23 @@ export class UsageTracker extends EventEmitter {
         await this.persist();
       }
     } catch (err) {
-      this.log.warn('Failed to load usage data, initializing new state', err);
-      const now = new Date();
-      this.state = {
-        year: now.getFullYear(),
-        month: now.getMonth() + 1,
-        totalAllowed: this.totalAllowed,
-        used: 0,
-        lastUpdatedISO: now.toISOString(),
-      };
-      await this.persist();
+      const errorCode = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (errorCode === 'ENOENT') {
+        this.log.debug('Usage file not found, initializing new usage state');
+        const now = new Date();
+        this.state = {
+          year: now.getFullYear(),
+          month: now.getMonth() + 1,
+          totalAllowed: this.totalAllowed,
+          used: 0,
+          lastUpdatedISO: now.toISOString(),
+        };
+        await this.persist();
+        return;
+      }
+
+      this.log.error('Failed to load usage data; refusing to reset usage state automatically', err);
+      throw err;
     }
   }
 

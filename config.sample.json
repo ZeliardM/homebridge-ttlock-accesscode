@@ -14,9 +14,9 @@
       "clientSecret": "YourClientSecret",
       "username": "YourUsername",
       "password": "YourPassword",
-      "totalApiCallsPerMonth": 100000,
-      "pollingInterval": 90,
-      "discoveryPollingInterval": 6,
+      "totalApiCallsPerMonth": 30000,
+      "pollingInterval": 300,
+      "discoveryPollingInterval": 12,
       "offlineInterval": 7,
       "waitTimeUpdate": 100
     }

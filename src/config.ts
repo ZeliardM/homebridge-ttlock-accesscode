@@ -67,10 +67,10 @@ export const defaultConfig: TTLockAccessCodeConfig = {
   clientSecret: '',
   username: '',
   password: '',
-  totalApiCallsPerMonth: 100000,
+  totalApiCallsPerMonth: 30000,
   discoveryOptions: {
-    pollingInterval: 90,
-    discoveryPollingInterval: 6,
+    pollingInterval: 300,
+    discoveryPollingInterval: 12,
     offlineInterval: 7,
   },
   advancedOptions: {
