@@ -35,7 +35,6 @@ This plug-in lets you control TTLock locks in the Apple Home app with lock/unloc
 - I have tested this plug-in with a G2 Gateway setup and TTLock lock access code features in Apple Home. More lock models and gateway setups are expected to work, but may vary by TTLock firmware and account setup.
 
 ## Features
-
 - Get the status of your TTLock devices.
 - Lock and unlock your TTLock devices.
 - Manage passcodes for your TTLock devices in Apple Home.
@@ -44,7 +43,7 @@ This plug-in lets you control TTLock locks in the Apple Home app with lock/unloc
 
 ## Installation
 - Install from the Homebridge UI or with npm.
-- After installing, configure your TTLock credentials and API app values, then restart Homebridge.
+- After installing, configure your TTLock credentials and API App values, then restart Homebridge.
 
 ```bash
 npm install -g homebridge-ttlock-accesscode
@@ -59,13 +58,11 @@ npm install -g homebridge-ttlock-accesscode
 - Polling is automatically slowed when monthly allowance gets lower.
 
 ## Access Code Notes
-
 - Access code support is exposed through the Apple Home App.
 - Existing passcodes are loaded from TTLock and mapped into the Apple Home App.
 - Add/Delete/List/Read flows are handled through the Apple Home App.
 
 ## Example Configuration
-
 ```json
 {
   "bridge": {
@@ -95,7 +92,6 @@ npm install -g homebridge-ttlock-accesscode
 ```
 
 ## Known Limitations
-
 - Apple HomeKey is not supported by TTLock readers.
 - Gateway-dependent locks will return gateway-offline conditions if the gateway is unavailable.
 - TTLock Cloud API limits and behavior can change without notice.
