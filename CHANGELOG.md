@@ -1,4 +1,11 @@
 # Changelog
+## [v2.0.1-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.1-beta.0)
+
+### Bug Fixes
+
+- [bug] Fix release_manager.py handling of escalated drafts [5a9b5ed](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/5a9b5ed5fe66172c5995790617a87d1a7df1ef1c) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.0...v2.0.1-beta.0
 
 ## [v2.0.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0) (2026-03-17)
 
