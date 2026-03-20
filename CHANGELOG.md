@@ -1,4 +1,12 @@
 # Changelog
+## [v2.0.1-beta.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.1-beta.1)
+
+### Other Changes
+
+- npm-dev(deps-dev): bump eslint from 10.0.3 to 10.1.0 [#46](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/46) (@dependabot[bot])
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.1-beta.0...v2.0.1-beta.1
+
 ## [v2.0.1-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.1-beta.0) (2026-03-18)
 
 ### Bug Fixes
