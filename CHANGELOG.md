@@ -5,6 +5,10 @@
 
 - [feature] Update Dependabot handling [f8e67ce](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/f8e67ce33f1404e83df60ef8577338d8e0418f78) (@ZeliardM)
 
+### Bug Fixes
+
+- [bug] Update beta escalation handling [8cd4f20](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/8cd4f20211676d06b9401c25e73160c0b16d86e4) (@ZeliardM)
+
 ### Other Changes
 
 - [other] Update dependencies [c0b4c7a](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/c0b4c7aafbbfb0ad0b69b1ae226aaa3bc6be8d60) (@ZeliardM)
