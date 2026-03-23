@@ -1,4 +1,34 @@
 # Changelog
+## [v2.1.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.1.0-beta.0) (2026-03-22)
+
+### Featured Changes
+
+- [feature] Update Dependabot handling [f8e67ce](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/f8e67ce33f1404e83df60ef8577338d8e0418f78) (@ZeliardM)
+
+### Bug Fixes
+
+- [bug] Update beta escalation handling [8cd4f20](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/8cd4f20211676d06b9401c25e73160c0b16d86e4) (@ZeliardM)
+
+### Other Changes
+
+- Update CHANGELOG.md for beta release v2.1.0-beta.0 [beta-release] (@github-actions)
+- [other] Update dependencies [c0b4c7a](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/c0b4c7aafbbfb0ad0b69b1ae226aaa3bc6be8d60) (@ZeliardM)
+- Bump flatted from 3.4.1 to 3.4.2 in the npm_and_yarn group across 1 directory [#47](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/47) (@dependabot[bot])
+- npm-dev(deps-dev): bump eslint from 10.0.3 to 10.1.0 [#46](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/46) (@dependabot[bot])
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.1-beta.0...v2.1.0-beta.0
+
+## [v2.0.1-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.1-beta.0) (2026-03-18)
+
+### Bug Fixes
+
+- [bug] Fix release_manager.py handling of escalated drafts [5a9b5ed](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/5a9b5ed5fe66172c5995790617a87d1a7df1ef1c) (@ZeliardM)
+
+### Other Changes
+
+- Update CHANGELOG.md for beta release v2.0.1-beta.0 [beta-release] (@github-actions)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.0.0...v2.0.1-beta.0
 
 ## [v2.0.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.0.0) (2026-03-17)
 
