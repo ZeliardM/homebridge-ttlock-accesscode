@@ -1,4 +1,12 @@
 # Changelog
+## [v2.1.0-beta.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.1.0-beta.1)
+
+### Other Changes
+
+- npm(deps): bump axios from 1.13.6 to 1.14.0 [#50](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/50) (@dependabot[bot])
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.1.0-beta.0...v2.1.0-beta.1
+
 ## [v2.1.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.1.0-beta.0) (2026-03-22)
 
 ### Featured Changes
