@@ -6,6 +6,7 @@
 - [other] Release Workflow Version Handling Fixes [33ed24d](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/33ed24db3b9632a91a336dd7f370950468612895) (@ZeliardM)
 - [other] Dependabot workflow fixes [4221a58](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/4221a58e63aca2e175b75f9c92f8c05310930c9f) (@ZeliardM)
 - [other] Workflow fixes for dependabot auto-merge [6dbc54e](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/6dbc54e24b935b35858bf3130403a90d11b3a96a) (@ZeliardM)
+- npm-dev(deps-dev): bump homebridge from 2.0.0-beta.87 to 2.0.0-beta.89 [#62](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/62) (@dependabot[bot])
 - npm-dev(deps-dev): bump @types/node from 25.5.2 to 25.6.0 [#60](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/60) (@dependabot[bot])
 - npm-dev(deps-dev): bump eslint from 10.1.0 to 10.2.0 [#59](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/59) (@dependabot[bot])
 - npm-dev(deps-dev): bump homebridge from 2.0.0-beta.84 to 2.0.0-beta.86 [#58](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/58) (@dependabot[bot])
