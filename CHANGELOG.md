@@ -1,8 +1,9 @@
 # Changelog
-## [v2.1.1-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.1.1-beta.0)
+## [v2.1.1-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.1.1-beta.0) (2026-04-21)
 
 ### Other Changes
 
+- Update CHANGELOG.md for beta release v2.1.1-beta.0 [beta-release] (@github-actions)
 - [other] Improve Workflow Release Handling [1212d7f](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/1212d7f3ff1c4f1f37f896c0e2acb972df9ad9cc) (@ZeliardM)
 - [other] Release Workflow Version Handling Fixes [33ed24d](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/33ed24db3b9632a91a336dd7f370950468612895) (@ZeliardM)
 - [other] Dependabot workflow fixes [4221a58](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/4221a58e63aca2e175b75f9c92f8c05310930c9f) (@ZeliardM)
