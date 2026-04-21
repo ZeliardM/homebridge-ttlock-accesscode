@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- [other] Improve Workflow Release Handling [1212d7f](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/1212d7f3ff1c4f1f37f896c0e2acb972df9ad9cc) (@ZeliardM)
 - [other] Release Workflow Version Handling Fixes [33ed24d](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/33ed24db3b9632a91a336dd7f370950468612895) (@ZeliardM)
 - [other] Dependabot workflow fixes [4221a58](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/4221a58e63aca2e175b75f9c92f8c05310930c9f) (@ZeliardM)
 - [other] Workflow fixes for dependabot auto-merge [6dbc54e](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/6dbc54e24b935b35858bf3130403a90d11b3a96a) (@ZeliardM)
