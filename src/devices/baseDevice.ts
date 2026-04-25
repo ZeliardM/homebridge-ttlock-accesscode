@@ -39,6 +39,10 @@ export default abstract class HomeKitDevice {
 
   private static locks: Map<string, Promise<unknown>> = new Map();
   private pendingChanges: Map<string, { pendingValue: CharacteristicValue; count: number }> = new Map();
+  private removedFromPlatform = false;
+  private readonly periodicDiscoveryCompleteHandler = () => {
+    this.updateEmitter.emit('periodicDeviceDiscoveryComplete');
+  };
 
   protected getSysInfoDeferred: () => Promise<void>;
 
@@ -59,9 +63,7 @@ export default abstract class HomeKitDevice {
     this.log = prefixLogger(this.platform.log, `[${this.name}]`);
     this.homebridgeAccessory = this.initializeAccessory();
     this.homebridgeAccessory.on(PlatformAccessoryEvent.IDENTIFY, () => this.identify());
-    this.platform.periodicDeviceDiscoveryEmitter.on('periodicDeviceDiscoveryComplete', () => {
-      this.updateEmitter.emit('periodicDeviceDiscoveryComplete');
-    });
+    this.platform.periodicDeviceDiscoveryEmitter.on('periodicDeviceDiscoveryComplete', this.periodicDiscoveryCompleteHandler);
 
     this.getSysInfoDeferred = deferAndCombine(
       this.fetchSysInfoInternal.bind(this),
@@ -161,7 +163,7 @@ export default abstract class HomeKitDevice {
   }
 
   protected shouldSkipUpdate(): boolean {
-    return this.ttlockDevice.offline || this.platform.isShuttingDown;
+    return this.removedFromPlatform || this.ttlockDevice.offline || this.platform.isShuttingDown;
   }
 
   protected async waitForUpdateOrDiscovery(): Promise<void> {
@@ -278,6 +280,16 @@ export default abstract class HomeKitDevice {
         this.updateEmitter.once('updateComplete', resolve);
       });
     }
+  }
+
+  public removeFromPlatform(): void {
+    this.removedFromPlatform = true;
+    void this.stopPolling();
+    this.platform.periodicDeviceDiscoveryEmitter.off(
+      'periodicDeviceDiscoveryComplete',
+      this.periodicDiscoveryCompleteHandler,
+    );
+    this.updateEmitter.emit('periodicDeviceDiscoveryComplete');
   }
 
   public updateAfterPeriodicDiscovery(force = false): void {

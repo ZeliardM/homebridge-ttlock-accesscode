@@ -353,6 +353,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const offlineInterval = this.config.discoveryOptions.offlineInterval;
     if (timeSinceLastSeen > offlineInterval) {
       this.log.info(`Accessory [${accessory.displayName}] is offline and outside the offline interval. Removing.`);
+      this.removeTrackedDevice(accessory.context.deviceId, accessory.UUID);
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.configuredAccessories.delete(uuid);
     } else if (!accessory.context.offline) {
@@ -623,9 +624,15 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       return;
     }
 
-    if (this.homekitDevicesById.has(deviceId)) {
-      this.log.info(`HomeKit device already added: [${deviceAlias}] [${deviceId}]`);
-      return;
+    const existingDevice = this.homekitDevicesById.get(deviceId);
+    if (existingDevice) {
+      if (!this.configuredAccessories.has(existingDevice.homebridgeAccessory.UUID)) {
+        this.log.warn(`HomeKit device [${deviceAlias}] [${deviceId}] is missing its accessory. Recreating it.`);
+        this.removeTrackedDevice(deviceId, existingDevice.homebridgeAccessory.UUID);
+      } else {
+        this.log.info(`HomeKit device already added: [${deviceAlias}] [${deviceId}]`);
+        return;
+      }
     }
 
     this.log.info(`Adding HomeKit device: [${deviceAlias}] [${deviceId}]`);
@@ -641,5 +648,28 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private async createHomeKitDevice(ttlockDevice: TTLockDevice): Promise<HomeKitDevice | undefined> {
     this.log.debug('Creating HomeKit device for:', ttlockDevice.sys_info);
     return await create(this, ttlockDevice);
+  }
+
+  private removeTrackedDevice(deviceId: string | undefined, accessoryUuid: string): void {
+    if (!deviceId) {
+      return;
+    }
+
+    const trackedDevice = this.homekitDevicesById.get(deviceId);
+    if (!trackedDevice) {
+      return;
+    }
+
+    if (trackedDevice.homebridgeAccessory.UUID !== accessoryUuid) {
+      this.log.debug(
+        `Skipping tracked device cleanup for [${deviceId}] because UUIDs do not match ` +
+        `(${trackedDevice.homebridgeAccessory.UUID} !== ${accessoryUuid}).`,
+      );
+      return;
+    }
+
+    this.homekitDevicesById.delete(deviceId);
+    trackedDevice.removeFromPlatform();
+    this.log.debug(`Removed tracked HomeKit device for [${deviceId}].`);
   }
 }
