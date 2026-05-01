@@ -1,4 +1,12 @@
 # Changelog
+## [v2.2.0-beta.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.2.0-beta.1)
+
+### Other Changes
+
+- npm-dev(deps-dev): bump homebridge from 2.0.0-beta.101 to 2.0.0-beta.105 [#65](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/65) (@dependabot[bot])
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.2.0-beta.0...v2.2.0-beta.1
+
 ## [v2.2.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.2.0-beta.0) (2026-04-25)
 
 ### Featured Changes
