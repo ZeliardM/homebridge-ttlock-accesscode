@@ -71,7 +71,7 @@
     }
   ],
   "dependencies": {
-    "axios": "^1.16.0",
+    "axios": "^1.16.1",
     "ber-tlv": "^0.9.2"
   },
   "overrides": {
