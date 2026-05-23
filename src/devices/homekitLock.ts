@@ -47,7 +47,14 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       return buildLockDescriptors(
         C,
         async (value, context) => {
+          const blockReason = this.deviceManager?.getLockCommandBlockReason(context.device.device_id);
+          if (blockReason) {
+            const action = Number(value) === C.LockTargetState.SECURED ? 'lock' : 'unlock';
+            this.log.warn(`Ignoring ${action} command for ${context.alias}: ${blockReason}`);
+            return false;
+          }
           await this.deviceManager!.controlDevice(context.device.device_id, 'state', value);
+          return true;
         },
       );
     }
@@ -141,18 +148,20 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
   }
 
   private parseOperationType(decodedTlv: Array<{ value: Buffer }>): number {
-    if (decodedTlv.length === 0) {
+    const operation = decodedTlv[0];
+    if (!operation) {
       throw new AccessCodeProtocolError('Empty AccessCodeControlPoint request');
     }
-    return Number(decodedTlv[0].value.toString('hex'));
+    return Number(operation.value.toString('hex'));
   }
 
   private parseIdentifierRequest(element: { value: Buffer }, requestType: string): bigint {
     const request = TlvFactory.parse(element.value);
-    if (request.length === 0) {
+    const identifierRecord = request[0];
+    if (!identifierRecord) {
       throw new AccessCodeProtocolError(`${requestType} request is missing its passcode index`);
     }
-    const identifier = request[0].value.toString('hex');
+    const identifier = identifierRecord.value.toString('hex');
     if (!identifier) {
       throw new AccessCodeProtocolError(`${requestType} request contained an empty passcode index`);
     }
@@ -161,10 +170,11 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
 
   private parsePasscodeRequest(element: { value: Buffer }): string {
     const request = TlvFactory.parse(element.value);
-    if (request.length === 0) {
+    const passcodeRecord = request[0];
+    if (!passcodeRecord) {
       throw new AccessCodeProtocolError('Add request is missing the passcode payload');
     }
-    return request[0].value.toString();
+    return passcodeRecord.value.toString();
   }
 
   private async buildListResponse(device: SysInfo): Promise<string> {
@@ -229,8 +239,12 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     if (decodedTlv.length < 2) {
       throw new AccessCodeProtocolError('Delete request is missing the target passcode index');
     }
+    const deleteRequest = decodedTlv[1];
+    if (!deleteRequest) {
+      throw new AccessCodeProtocolError('Delete request is missing the target passcode index');
+    }
     const passcodes = await this.ensurePasscodesLoaded(device);
-    const deletePasscodeIdentifier = this.parseIdentifierRequest(decodedTlv[1], 'Delete');
+    const deletePasscodeIdentifier = this.parseIdentifierRequest(deleteRequest, 'Delete');
     const passcode = this.findPasscodeByIdentifier(passcodes, deletePasscodeIdentifier);
     if (!passcode) {
       throw new AccessCodeProtocolError(`Passcode identifier ${deletePasscodeIdentifier.toString()} was not found for delete`);

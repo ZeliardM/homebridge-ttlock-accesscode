@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: ${{ fromJson('["20","22","24"]') }}
+        node-version: ${{ fromJson('["22","24"]') }}
     steps:
       - name: Checkout Actions
         id: checkout
@@ -67,6 +67,30 @@ jobs:
               process.exit(1);
             }
           })();
+          NODE
+
+      - name: Package Dry Run
+        id: package-dry-run
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACK_JSON="$(npm pack --dry-run --json)"
+          PACK_JSON="$PACK_JSON" node <<'NODE'
+          const [pack] = JSON.parse(process.env.PACK_JSON);
+          const files = new Set(pack.files.map((file) => file.path));
+          const requiredFiles = [
+            'config.schema.json',
+            'dist/index.js',
+            'homebridge-ui/public/index.html',
+            'homebridge-ui/server.js',
+            'package.json',
+          ];
+          const missingFiles = requiredFiles.filter((file) => !files.has(file));
+          if (missingFiles.length > 0) {
+            console.error(`Package is missing required files: ${missingFiles.join(', ')}`);
+            process.exit(1);
+          }
+          console.log(`Package dry run OK: ${pack.files.length} files`);
           NODE
 
       - name: Outdated / Audit

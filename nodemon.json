@@ -1,9 +1,14 @@
 {
   "watch": [
-    "src"
+    "src",
+    "homebridge-ui",
+    "config.schema.json"
   ],
-  "ext": "ts",
-  "ignore": [],
+  "ext": "ts,js,json,css,html",
+  "ignore": [
+    "dist",
+    "node_modules"
+  ],
   "exec": "tsc && homebridge -I -D",
   "signal": "SIGTERM",
   "env": {

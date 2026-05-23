@@ -2,15 +2,13 @@ docs:
   - changed-files:
     - any-glob-to-any-file: '**/*.md'
 
-branding:
-  - changed-files:
-    - any-glob-to-any-file: branding/**
-
 enhancement:
   - any:
     - changed-files:
       - any-glob-to-any-file: 'src/**/*'
+      - any-glob-to-any-file: 'homebridge-ui/**/*'
       - any-glob-to-any-file: 'config.schema.json'
+      - any-glob-to-any-file: 'config.sample.json'
     - head-branch:
       - '^feature/.*'
       - '^feat/.*'

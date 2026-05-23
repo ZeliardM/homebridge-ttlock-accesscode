@@ -31,11 +31,24 @@ import { deviceEventEmitter } from './devices/deviceManager.js';
 import type { TTLockAccessCodeConfig } from './config.js';
 import type { TTLockDevice } from './devices/deviceTypes.js';
 
-export type TTLockAccessCodeAccessoryContext = {
+export type TTLockAccessoryContext = {
+  kind?: 'ttlock';
   deviceId?: string;
   lastSeen?: Date;
   offline?: boolean;
 };
+
+export type ManualDoorAccessoryContext = {
+  kind: 'manualDoor';
+  lastSeen?: Date;
+  manualDoorId?: string;
+  manualDoorLinkedLockId?: string;
+  manualDoorOpen?: boolean;
+  manualDoorSensorId?: string;
+  offline?: boolean;
+};
+
+export type TTLockAccessCodeAccessoryContext = TTLockAccessoryContext | ManualDoorAccessoryContext;
 
 let packageConfig: { name: string; version: string; engines: { node: string } };
 
@@ -53,10 +66,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   public usageTracker: UsageTracker | undefined;
   public taskQueue: TaskQueue;
   private readonly homekitDevicesById: Map<string, HomeKitDevice> = new Map();
-  private deviceDiscoveredHandler?: (device: TTLockDevice) => Promise<void>;
-  private discoveryInterval?: NodeJS.Timeout;
+  private deviceDiscoveredHandler: ((device: TTLockDevice) => Promise<void>) | undefined;
+  private discoveryInterval: NodeJS.Timeout | undefined;
   private platformInitialization: Promise<void>;
-  private usageTierChangedHandler?: () => void;
+  private usageTierChangedHandler: (() => void) | undefined;
 
   constructor(public readonly log: Logging, config: PlatformConfig, public readonly api: API) {
     this.Service = this.api.hap.Service;
@@ -93,6 +106,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       if (this.deviceDiscoveredHandler) {
         deviceEventEmitter.off('deviceDiscovered', this.deviceDiscoveredHandler);
       }
+      this.deviceManager?.stopExternalDoors();
       this.log.debug('Stopping all polling tasks');
       for (const device of this.homekitDevicesById.values()) {
         await device.stopPolling(true);
@@ -187,6 +201,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       this.log.debug('Initializing DeviceManager');
       this.deviceManager = new DeviceManager(this);
       this.log.debug('DeviceManager initialized');
+      this.deviceManager.initializeExternalDoors();
 
       await this.discoverDevices();
       this.log.debug('Device discovery completed');
@@ -245,7 +260,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     try {
       if (this.deviceManager) {
         try {
-          const deviceCount = this.configuredAccessories.size || 0;
+          const deviceCount = this.getTTLockAccessoryCount();
           const callsForDiscovery = 1 + (2 * deviceCount);
           if (this.usageTracker) {
             const reserved = await this.usageTracker.beginBatch(callsForDiscovery, 'initialDiscovery');
@@ -281,7 +296,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     try {
       if (this.deviceManager) {
         try {
-          const deviceCount = this.configuredAccessories.size || 0;
+          const deviceCount = this.getTTLockAccessoryCount();
           const callsForDiscovery = 1 + (2 * deviceCount);
           if (this.usageTracker) {
             const reserved = await this.usageTracker.beginBatch(callsForDiscovery, 'periodicDiscovery');
@@ -330,6 +345,9 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private handleOfflineDevices(discoveredDeviceIds: Set<string>): void {
     const now = new Date();
     this.configuredAccessories.forEach((accessory, uuid) => {
+      if (accessory.context.kind === 'manualDoor') {
+        return;
+      }
       const deviceId = accessory.context.deviceId;
       if (!deviceId) {
         this.log.warn(`Accessory [${accessory.displayName}] is missing a deviceId.`);
@@ -339,13 +357,13 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.log.debug(`Accessory [${accessory.displayName}] was discovered and is online.`);
         this.updateAccessoryStatus(accessory, now, false);
       } else {
-        this.handleOfflineAccessory(accessory, uuid, now);
+        this.handleOfflineAccessory(accessory as PlatformAccessory<TTLockAccessoryContext>, uuid, now);
       }
     });
   }
 
   private handleOfflineAccessory(
-    accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>,
+    accessory: PlatformAccessory<TTLockAccessoryContext>,
     uuid: string,
     now: Date,
   ): void {
@@ -353,6 +371,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const offlineInterval = this.config.discoveryOptions.offlineInterval;
     if (timeSinceLastSeen > offlineInterval) {
       this.log.info(`Accessory [${accessory.displayName}] is offline and outside the offline interval. Removing.`);
+      this.removeTrackedDevice(accessory.context.deviceId, accessory.UUID);
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       this.configuredAccessories.delete(uuid);
     } else if (!accessory.context.offline) {
@@ -363,7 +382,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
   private findPlatformAccessory(deviceId: string): PlatformAccessory<TTLockAccessCodeAccessoryContext> | undefined {
     for (const accessory of this.configuredAccessories.values()) {
-      if (accessory.context.deviceId === deviceId) {
+      if (accessory.context.kind !== 'manualDoor' && accessory.context.deviceId === deviceId) {
         return accessory;
       }
     }
@@ -463,7 +482,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       await this.usageTracker.init();
       this.log.debug('UsageTracker initialized');
       this.usageTierChangedHandler = () => {
-        this.log.info('API usage tier changed — recalculating polling intervals...');
+        this.log.info('API usage tier changed - recalculating polling intervals...');
         void this.reschedulePolling();
       };
       this.usageTracker.on('tierChanged', this.usageTierChangedHandler);
@@ -509,6 +528,12 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const finalSec = Math.min(Math.max(basePollingIntervalSec * multiplier, minPollSec), maxPollSec);
     const finalMs = Math.floor(finalSec * 1000);
     return Math.max(userIntervalMs, finalMs);
+  }
+
+  public getTTLockAccessoryCount(): number {
+    return Array.from(this.configuredAccessories.values())
+      .filter(accessory => accessory.context.kind !== 'manualDoor')
+      .length;
   }
 
   private async reschedulePolling(): Promise<void> {
@@ -571,6 +596,12 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   configureAccessory(accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>): void {
     this.log.debug(`Configuring Platform Accessory: [${accessory.displayName}] UUID: ${accessory.UUID}`);
 
+    if (accessory.context.kind === 'manualDoor') {
+      this.log.debug(`Configuring cached manual door accessory: [${accessory.displayName}]`);
+      this.configuredAccessories.set(accessory.UUID, accessory);
+      return;
+    }
+
     if (!accessory.context.lastSeen && !accessory.context.offline) {
       this.log.debug(`Setting initial lastSeen and offline status for Platform Accessory: [${accessory.displayName}]`);
       accessory.context.lastSeen = new Date();
@@ -623,9 +654,15 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       return;
     }
 
-    if (this.homekitDevicesById.has(deviceId)) {
-      this.log.info(`HomeKit device already added: [${deviceAlias}] [${deviceId}]`);
-      return;
+    const existingDevice = this.homekitDevicesById.get(deviceId);
+    if (existingDevice) {
+      if (!this.configuredAccessories.has(existingDevice.homebridgeAccessory.UUID)) {
+        this.log.warn(`HomeKit device [${deviceAlias}] [${deviceId}] is missing its accessory. Recreating it.`);
+        this.removeTrackedDevice(deviceId, existingDevice.homebridgeAccessory.UUID);
+      } else {
+        this.log.info(`HomeKit device already added: [${deviceAlias}] [${deviceId}]`);
+        return;
+      }
     }
 
     this.log.info(`Adding HomeKit device: [${deviceAlias}] [${deviceId}]`);
@@ -641,5 +678,28 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private async createHomeKitDevice(ttlockDevice: TTLockDevice): Promise<HomeKitDevice | undefined> {
     this.log.debug('Creating HomeKit device for:', ttlockDevice.sys_info);
     return await create(this, ttlockDevice);
+  }
+
+  private removeTrackedDevice(deviceId: string | undefined, accessoryUuid: string): void {
+    if (!deviceId) {
+      return;
+    }
+
+    const trackedDevice = this.homekitDevicesById.get(deviceId);
+    if (!trackedDevice) {
+      return;
+    }
+
+    if (trackedDevice.homebridgeAccessory.UUID !== accessoryUuid) {
+      this.log.debug(
+        `Skipping tracked device cleanup for [${deviceId}] because UUIDs do not match ` +
+        `(${trackedDevice.homebridgeAccessory.UUID} !== ${accessoryUuid}).`,
+      );
+      return;
+    }
+
+    this.homekitDevicesById.delete(deviceId);
+    trackedDevice.removeFromPlatform();
+    this.log.debug(`Removed tracked HomeKit device for [${deviceId}].`);
   }
 }

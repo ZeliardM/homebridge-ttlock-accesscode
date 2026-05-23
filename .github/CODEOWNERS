@@ -3,8 +3,17 @@
 
 # Core source and configuration
 /src/                                @ZeliardM
+/homebridge-ui/                      @ZeliardM
 /config.schema.json                  @ZeliardM
+/config.sample.json                  @ZeliardM
 /package.json                        @ZeliardM
+/package-lock.json                   @ZeliardM
+/tsconfig.json                       @ZeliardM
+/eslint.config.js                    @ZeliardM
+/nodemon.json                        @ZeliardM
+/.gitattributes                      @ZeliardM
+/.gitignore                          @ZeliardM
+/.npmignore                          @ZeliardM
 /CHANGELOG.md                        @ZeliardM
 /README.md                           @ZeliardM
 /CONTRIBUTING.md                     @ZeliardM

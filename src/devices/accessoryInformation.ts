@@ -1,13 +1,19 @@
 import type { CharacteristicValue, HAP, PlatformAccessory, Service } from 'homebridge';
 
-import type HomeKitDevice from './baseDevice.js';
+export type AccessoryInformationDevice = {
+  readonly firmwareRevision: string;
+  readonly manufacturer: string;
+  readonly model: string;
+  readonly name: string;
+  readonly serialNumber: string;
+};
 
 export default function accessoryInformation(
   hap: HAP,
-): (accessory: PlatformAccessory, homekitDevice: HomeKitDevice) => Service | undefined {
+): (accessory: PlatformAccessory, homekitDevice: AccessoryInformationDevice) => Service | undefined {
   const { Characteristic, Service: { AccessoryInformation } } = hap;
 
-  return (accessory: PlatformAccessory, homekitDevice: HomeKitDevice) => {
+  return (accessory: PlatformAccessory, homekitDevice: AccessoryInformationDevice) => {
     const infoService = accessory.getService(AccessoryInformation) ?? accessory.addService(AccessoryInformation);
 
     const nameCharacteristic = infoService.getCharacteristic(Characteristic.Name);
