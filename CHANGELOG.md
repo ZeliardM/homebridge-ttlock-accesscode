@@ -1,4 +1,11 @@
 # Changelog
+## [v2.3.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.3.0-beta.0)
+
+### Featured Changes
+
+- [enhancement] Ignore Python Cache Files [6e8308a](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/6e8308a8e65b26b81dd2af7fde33ba022d52ad62) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.2.0...v2.3.0-beta.0
 
 ## [v2.2.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.2.0) (2026-05-23)
 
