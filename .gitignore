@@ -21,6 +21,9 @@ coverage/
 # Local environment and caches
 .env
 .env.*
+.pytest_cache/
+__pycache__/
+*.py[cod]
 .npm/
 .eslintcache
 .cache/
