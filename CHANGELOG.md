@@ -1,5 +1,5 @@
 # Changelog
-## [v2.2.0-beta.2](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.2.0-beta.2)
+## [v2.2.0-beta.2](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.2.0-beta.2) (2026-05-23)
 
 ### Featured Changes
 
@@ -7,6 +7,7 @@
 
 ### Other Changes
 
+- Update CHANGELOG.md for beta release v2.2.0-beta.2 [beta-release] (@github-actions)
 - npm-dev(deps-dev): bump typescript-eslint from 8.59.3 to 8.59.4 [#76](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/76) (@dependabot[bot])
 - npm(deps): bump axios from 1.16.0 to 1.16.1 [#75](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/75) (@dependabot[bot])
 - npm-dev(deps-dev): bump eslint from 10.3.0 to 10.4.0 [#74](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/74) (@dependabot[bot])
