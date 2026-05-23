@@ -1,6 +1,10 @@
 # Changelog
 ## [v2.2.0-beta.2](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.2.0-beta.2)
 
+### Featured Changes
+
+- [enhancement] Add option DIRIGERA Door Integration [25462f8](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/25462f8097ef655d71aea8725f24716e9726557b) (@ZeliardM)
+
 ### Other Changes
 
 - npm-dev(deps-dev): bump typescript-eslint from 8.59.3 to 8.59.4 [#76](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/76) (@dependabot[bot])
