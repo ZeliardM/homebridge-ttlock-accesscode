@@ -1,4 +1,45 @@
 # Changelog
+
+## [v2.2.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.2.0)
+
+### Featured Changes
+
+- [enhancement] Add option DIRIGERA Door Integration [25462f8](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/25462f8097ef655d71aea8725f24716e9726557b) (@ZeliardM)
+- [enhancement] Improve offline device handling [54ccf1c](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/54ccf1c9c5765834dd80b2bd3e6f7eb629e8e439) (@ZeliardM)
+
+### Other Changes
+
+- [other] Update dependencies [2b297ea](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/2b297ea441f630cd73ed4e3e42d1f76dc4d3f105) (@ZeliardM)
+- [other] Improve Workflow Release Handling [1212d7f](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/1212d7f3ff1c4f1f37f896c0e2acb972df9ad9cc) (@ZeliardM)
+- [other] Release Workflow Version Handling Fixes [33ed24d](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/33ed24db3b9632a91a336dd7f370950468612895) (@ZeliardM)
+- [other] Dependabot workflow fixes [4221a58](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/4221a58e63aca2e175b75f9c92f8c05310930c9f) (@ZeliardM)
+- [other] Workflow fixes for dependabot auto-merge [6dbc54e](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/6dbc54e24b935b35858bf3130403a90d11b3a96a) (@ZeliardM)
+- npm-dev(deps-dev): bump typescript-eslint from 8.59.3 to 8.59.4 [#76](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/76) (@dependabot[bot])
+- npm(deps): bump axios from 1.16.0 to 1.16.1 [#75](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/75) (@dependabot[bot])
+- npm-dev(deps-dev): bump eslint from 10.3.0 to 10.4.0 [#74](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/74) (@dependabot[bot])
+- npm-dev(deps-dev): bump @types/node from 25.6.2 to 25.8.0 [#73](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/73) (@dependabot[bot])
+- npm-dev(deps-dev): bump homebridge from 2.0.1 to 2.0.2 [#72](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/72) (@dependabot[bot])
+- npm-dev(deps-dev): bump typescript-eslint from 8.59.2 to 8.59.3 [#71](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/71) (@dependabot[bot])
+- npm-dev(deps-dev): bump homebridge from 2.0.0 to 2.0.1 [#70](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/70) (@dependabot[bot])
+- npm-dev(deps-dev): bump @types/node from 25.6.0 to 25.6.2 [#69](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/69) (@dependabot[bot])
+- npm-dev(deps-dev): bump eslint from 10.2.1 to 10.3.0 [#67](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/67) (@dependabot[bot])
+- npm-dev(deps-dev): bump typescript-eslint from 8.59.0 to 8.59.1 [#66](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/66) (@dependabot[bot])
+- npm-dev(deps-dev): bump homebridge from 2.0.0-beta.101 to 2.0.0-beta.105 [#65](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/65) (@dependabot[bot])
+- npm(deps): bump axios from 1.15.1 to 1.15.2 [#64](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/64) (@dependabot[bot])
+- npm-dev(deps-dev): bump homebridge from 2.0.0-beta.99 to 2.0.0-beta.101 [#63](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/63) (@dependabot[bot])
+- npm-dev(deps-dev): bump homebridge from 2.0.0-beta.87 to 2.0.0-beta.89 [#62](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/62) (@dependabot[bot])
+- npm-dev(deps-dev): bump @types/node from 25.5.2 to 25.6.0 [#60](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/60) (@dependabot[bot])
+- npm-dev(deps-dev): bump eslint from 10.1.0 to 10.2.0 [#59](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/59) (@dependabot[bot])
+- npm-dev(deps-dev): bump homebridge from 2.0.0-beta.84 to 2.0.0-beta.86 [#58](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/58) (@dependabot[bot])
+- npm-dev(deps-dev): bump typescript-eslint from 8.57.2 to 8.58.1 [#57](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/57) (@dependabot[bot])
+- npm-dev(deps-dev): bump homebridge from 2.0.0-beta.79 to 2.0.0-beta.84 [#55](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/55) (@dependabot[bot])
+- npm-dev(deps-dev): bump @types/node from 25.5.0 to 25.5.2 [#54](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/54) (@dependabot[bot])
+- npm-dev(deps-dev): bump typescript-eslint from 8.57.1 to 8.57.2 [#52](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/52) (@dependabot[bot])
+- npm(deps): bump axios from 1.13.6 to 1.14.0 [#50](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/50) (@dependabot[bot])
+- Convert beta releases (v2.1.1-beta.0, v2.2.0-beta.0, v2.2.0-beta.1, v2.2.0-beta.2) to regular release v2.2.0 [beta-to-release] (@github-actions)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.1.0...v2.2.0
+
 ## [v2.2.0-beta.2](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.2.0-beta.2) (2026-05-23)
 
 ### Featured Changes
