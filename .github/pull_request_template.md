@@ -45,7 +45,7 @@ BREAKING_CHANGE_EXPLANATION_END
 
 ## Checklist
 - [ ] Base branch is `beta`
-- [ ] Classification labels applied (see “Type” above)
+- [ ] Classification labels applied (see "Type" above)
 - [ ] Changelog impact understood
 - [ ] Docs updated where appropriate
-- [ ] Linked issues (if any): #123
+- [ ] Linked issues (if any): <!-- e.g. Closes issue number here -->

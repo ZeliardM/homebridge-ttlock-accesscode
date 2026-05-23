@@ -1,0 +1,11 @@
+* text=auto
+
+# Source, UI, config, docs, and workflow files stay LF across platforms.
+*.css text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.ts text eol=lf
+*.yml text eol=lf

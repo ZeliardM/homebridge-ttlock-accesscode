@@ -24,15 +24,15 @@ import type {
   SysInfo,
   TTLockDevice,
 } from './deviceTypes.js';
-import type { TTLockAccessCodeAccessoryContext } from '../platform.js';
+import type { TTLockAccessoryContext } from '../platform.js';
 
 export default abstract class HomeKitDevice {
   readonly log: Logger;
   protected deviceManager: DeviceManager | undefined;
-  public homebridgeAccessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>;
+  public homebridgeAccessory: PlatformAccessory<TTLockAccessoryContext>;
   public isUpdating = false;
   protected previousSnapshot?: TTLockDevice;
-  protected pollingInterval?: NodeJS.Timeout;
+  protected pollingInterval: NodeJS.Timeout | undefined;
   protected updateEmitter = new EventEmitter();
   private consecutivePollFailures = 0;
   private readonly maxConsecutivePollFailures = 3;
@@ -77,13 +77,14 @@ export default abstract class HomeKitDevice {
     }
   }
 
-  private initializeAccessory(): PlatformAccessory<TTLockAccessCodeAccessoryContext> {
+  private initializeAccessory(): PlatformAccessory<TTLockAccessoryContext> {
     const uuid = this.platform.api.hap.uuid.generate(this.id);
-    const existingAccessory = this.platform.configuredAccessories.get(uuid);
-    let accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>;
+    const existingAccessory = this.platform.configuredAccessories.get(uuid) as PlatformAccessory<TTLockAccessoryContext> | undefined;
+    let accessory: PlatformAccessory<TTLockAccessoryContext>;
     if (!existingAccessory) {
       this.log.debug(`Creating new Platform Accessory [${this.id}] [${uuid}] category: ${this.categoryName}`);
       accessory = new this.platform.api.platformAccessory(this.name, uuid, this.category);
+      accessory.context.kind = 'ttlock';
       accessory.context.deviceId = this.id;
       accessory.context.lastSeen = this.ttlockDevice.last_seen;
       accessory.context.offline = this.ttlockDevice.offline;
@@ -99,7 +100,7 @@ export default abstract class HomeKitDevice {
     return accessory;
   }
 
-  private updateAccessory(accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>): void {
+  private updateAccessory(accessory: PlatformAccessory<TTLockAccessoryContext>): void {
     const currentDisplayName = accessory.displayName;
     const deviceName = this.name;
     let displayNameChanged = false;
@@ -110,6 +111,7 @@ export default abstract class HomeKitDevice {
     }
 
     accessory.context.deviceId = this.id;
+    accessory.context.kind = 'ttlock';
     accessory.context.lastSeen = this.ttlockDevice.last_seen;
     accessory.context.offline = this.ttlockDevice.offline;
     this.platform.configuredAccessories.set(accessory.UUID, accessory);
@@ -260,7 +262,7 @@ export default abstract class HomeKitDevice {
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
     }
-    const deviceCount = this.platform.configuredAccessories.size || 0;
+    const deviceCount = this.platform.getTTLockAccessoryCount();
     const userIntervalMs = this.platform.config.discoveryOptions.pollingInterval;
     const effectiveInterval = this.platform.computeEffectivePollingInterval(deviceCount, userIntervalMs);
     this.log.debug(`Starting polling with interval ${effectiveInterval}ms`);
@@ -591,7 +593,7 @@ export default abstract class HomeKitDevice {
 
     if (shouldUpdate) {
       if (label && homeKitValueChanged) {
-        this.log.debug(`Updating ${label}: ${previousValue} → ${nextValue}`);
+        this.log.debug(`Updating ${label}: ${previousValue} -> ${nextValue}`);
       }
       this.updateValue(
         service,

@@ -4,7 +4,7 @@ import type { CharacteristicDescriptor, DescriptorContext } from './deviceTypes.
 
 export function buildLockDescriptors(
   C: typeof Characteristic,
-  setTarget: (value: number | CharacteristicValue, context: DescriptorContext) => Promise<void>,
+  setTarget: (value: number | CharacteristicValue, context: DescriptorContext) => Promise<boolean | void>,
 ): CharacteristicDescriptor[] {
   return [
     {
@@ -25,7 +25,10 @@ export function buildLockDescriptors(
       getInitial: context => context!.device.state ?? C.LockTargetState.SECURED,
       getCurrent: context => context!.device.state ?? C.LockTargetState.SECURED,
       applySet: async (value, context) => {
-        await setTarget(Number(value), context);
+        const applied = await setTarget(Number(value), context);
+        if (applied === false) {
+          return;
+        }
         context.device.state = Number(value);
       },
     },

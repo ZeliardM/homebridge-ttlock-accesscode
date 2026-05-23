@@ -18,7 +18,23 @@
       "pollingInterval": 300,
       "discoveryPollingInterval": 12,
       "offlineInterval": 7,
-      "waitTimeUpdate": 100
+      "waitTimeUpdate": 100,
+      "externalDoors": {
+        "doorPollingInterval": 60,
+        "hubs": [
+          {
+            "ip": "192.168.1.50",
+            "accessToken": "DIRIGERA_ACCESS_TOKEN"
+          }
+        ],
+        "doors": [
+          {
+            "name": "Front Door",
+            "sensor": "IKEA_CONTACT_SENSOR_ID",
+            "lock": "TTLOCK_LOCK_ID"
+          }
+        ]
+      }
     }
   ],
   "accessories": []

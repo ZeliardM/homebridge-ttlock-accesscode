@@ -106,7 +106,10 @@ export function lookupCharacteristicNameByUUID(
   characteristic: typeof Characteristic,
   uuid: string,
 ): string | undefined {
-  return Object.keys(characteristic).find(key => ((characteristic as unknown as {[key: string]: {UUID: string}})[key].UUID === uuid));
+  return Object.keys(characteristic).find(key => {
+    const candidate = (characteristic as unknown as {[key: string]: {UUID: string} | undefined})[key];
+    return candidate?.UUID === uuid;
+  });
 }
 
 export function prefixLogger(logger: Logger, prefix: string | (() => string)): Logging {

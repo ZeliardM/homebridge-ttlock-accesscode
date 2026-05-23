@@ -42,7 +42,43 @@ export interface TTLockAccessCodeConfigInput {
   discoveryPollingInterval?: number;
   offlineInterval?: number;
   waitTimeUpdate?: number;
+  externalDoors?: ExternalDoorsConfigInput;
 }
+
+export interface ExternalDoorsConfigInput {
+  doorPollingInterval?: number;
+  hubs?: ExternalDoorHubConfigInput[];
+  doors?: ExternalDoorConfigInput[];
+}
+
+export interface ExternalDoorHubConfigInput {
+  ip?: string;
+  accessToken?: string;
+}
+
+export interface ExternalDoorConfigInput {
+  name?: string;
+  sensor?: string;
+  lock?: string;
+}
+
+export type ManualDoorConfig = {
+  id: string;
+  name: string;
+  sensor: string;
+  lock: string;
+};
+
+export type ManualDoorHubConfig = {
+  ip: string;
+  accessToken: string;
+};
+
+export type ExternalDoorsConfig = {
+  doorPollingInterval: number;
+  hubs: ManualDoorHubConfig[];
+  doors: ManualDoorConfig[];
+};
 
 export type TTLockAccessCodeConfig = {
   name: string;
@@ -59,7 +95,10 @@ export type TTLockAccessCodeConfig = {
   advancedOptions: {
     waitTimeUpdate: number;
   };
+  externalDoors: ExternalDoorsConfig;
 };
+
+const DEFAULT_MANUAL_DOOR_POLLING_INTERVAL_SECONDS = 60;
 
 export const defaultConfig: TTLockAccessCodeConfig = {
   name: 'TTLockAccessCode',
@@ -76,6 +115,11 @@ export const defaultConfig: TTLockAccessCodeConfig = {
   advancedOptions: {
     waitTimeUpdate: 100,
   },
+  externalDoors: {
+    doorPollingInterval: DEFAULT_MANUAL_DOOR_POLLING_INTERVAL_SECONDS * 1000,
+    hubs: [],
+    doors: [],
+  },
 };
 
 function validateConfig(config: Record<string, unknown>): string[] {
@@ -91,6 +135,7 @@ function validateConfig(config: Record<string, unknown>): string[] {
   validateType(config, 'discoveryPollingInterval', 'number', errors);
   validateType(config, 'offlineInterval', 'number', errors);
   validateType(config, 'waitTimeUpdate', 'number', errors);
+  validateExternalDoorsConfig(config, errors);
 
   return errors;
 }
@@ -106,6 +151,164 @@ function validateType(
   }
 }
 
+function validateExternalDoorsConfig(config: Record<string, unknown>, errors: string[]): void {
+  if (config.externalDoors === undefined) {
+    return;
+  }
+
+  if (!isObjectLike(config.externalDoors)) {
+    errors.push('`externalDoors` should be an object.');
+    return;
+  }
+
+  const externalDoors = config.externalDoors;
+  validateOptionalType(externalDoors, 'externalDoors', 'doorPollingInterval', 'number', errors);
+  validateExternalDoorHubs(externalDoors.hubs, errors);
+  validateExternalDoors(externalDoors.doors, errors);
+
+  if (
+    Array.isArray(externalDoors.doors) &&
+    externalDoors.doors.length > 0 &&
+    (!Array.isArray(externalDoors.hubs) || externalDoors.hubs.length === 0)
+  ) {
+    errors.push('`externalDoors.hubs` should include at least one DIRIGERA hub when external doors are configured.');
+  }
+
+  if (
+    Array.isArray(externalDoors.doors) &&
+    externalDoors.doors.length > 0 &&
+    Array.isArray(externalDoors.hubs) &&
+    !externalDoors.hubs.some(hub => isObjectLike(hub) && typeof hub.accessToken === 'string' && hub.accessToken.trim().length > 0)
+  ) {
+    errors.push('`externalDoors.hubs` should include at least one paired DIRIGERA hub when external doors are configured.');
+  }
+}
+
+function validateExternalDoorHubs(hubs: unknown, errors: string[]): void {
+  if (hubs === undefined) {
+    return;
+  }
+
+  if (!Array.isArray(hubs)) {
+    errors.push('`externalDoors.hubs` should be an array.');
+    return;
+  }
+
+  hubs.forEach((hub, hubIndex) => {
+    if (!isObjectLike(hub)) {
+      errors.push(`\`externalDoors.hubs[${hubIndex}]\` should be an object.`);
+      return;
+    }
+    validateRequiredString(hub, `externalDoors.hubs[${hubIndex}]`, 'ip', errors);
+    validateDirigeraAccessToken(hub, `externalDoors.hubs[${hubIndex}]`, errors);
+  });
+}
+
+function validateExternalDoors(doors: unknown, errors: string[]): void {
+  if (doors === undefined) {
+    return;
+  }
+
+  if (!Array.isArray(doors)) {
+    errors.push('`externalDoors.doors` should be an array.');
+    return;
+  }
+
+  doors.forEach((door, doorIndex) => {
+    if (!isObjectLike(door)) {
+      errors.push(`\`externalDoors.doors[${doorIndex}]\` should be an object.`);
+      return;
+    }
+
+    validateRequiredString(door, `externalDoors.doors[${doorIndex}]`, 'name', errors);
+    validateRequiredString(door, `externalDoors.doors[${doorIndex}]`, 'sensor', errors);
+    validateRequiredString(door, `externalDoors.doors[${doorIndex}]`, 'lock', errors);
+  });
+}
+
+function validateRequiredString(
+  config: Record<string, unknown>,
+  path: string,
+  key: string,
+  errors: string[],
+): void {
+  if (typeof config[key] !== 'string' || config[key].trim().length === 0) {
+    errors.push(`\`${path}.${key}\` should be a non-empty string.`);
+  }
+}
+
+function validateOptionalType(
+  config: Record<string, unknown>,
+  path: string,
+  key: string,
+  expectedType: string,
+  errors: string[],
+): void {
+  if (config[key] !== undefined && typeof config[key] !== expectedType) {
+    errors.push(`\`${path}.${key}\` should be a ${expectedType}.`);
+  }
+}
+
+function validateDirigeraAccessToken(
+  config: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if (typeof config.accessToken !== 'string' || config.accessToken.trim().length === 0) {
+    return;
+  }
+
+  const tokenSegments = config.accessToken.trim().split('.');
+  if (tokenSegments.length !== 3 || tokenSegments.some(segment => segment.length === 0)) {
+    errors.push(
+      `\`${path}.accessToken\` should be the complete DIRIGERA access token generated by pairing. ` +
+      'It should have three dot-separated JWT segments.',
+    );
+  }
+}
+
+export function generateManualDoorId(name: string, usedIds = new Set<string>()): string {
+  const base = slugify(name);
+  let candidate = base;
+  let index = 2;
+  while (usedIds.has(candidate)) {
+    candidate = `${base}-${index}`;
+    index++;
+  }
+  usedIds.add(candidate);
+  return candidate;
+}
+
+function slugify(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'manual-door';
+}
+
+function parseExternalDoorsConfig(externalDoors?: ExternalDoorsConfigInput): ExternalDoorsConfig {
+  const doorPollingInterval = Math.max(
+    10,
+    externalDoors?.doorPollingInterval ?? DEFAULT_MANUAL_DOOR_POLLING_INTERVAL_SECONDS,
+  ) * 1000;
+  const usedIds = new Set<string>();
+
+  return {
+    doorPollingInterval,
+    hubs: (externalDoors?.hubs ?? []).map(hub => ({
+      ip: hub.ip?.trim() ?? '',
+      accessToken: hub.accessToken?.trim() ?? '',
+    })),
+    doors: (externalDoors?.doors ?? []).map(door => ({
+      id: generateManualDoorId(door.name?.trim() ?? '', usedIds),
+      name: door.name?.trim() ?? '',
+      sensor: door.sensor?.trim() ?? '',
+      lock: door.lock?.trim() ?? '',
+    })),
+  };
+}
+
 export function parseConfig(config: Record<string, unknown>): TTLockAccessCodeConfig {
   const errors = validateConfig(config);
   if (errors.length > 0) {
@@ -116,7 +319,7 @@ export function parseConfig(config: Record<string, unknown>): TTLockAccessCodeCo
     throw new ConfigParseError('Error parsing config');
   }
 
-  const parsedConfig = { ...defaultConfig, ...config } as TTLockAccessCodeConfigInput;
+  const parsedConfig = config as TTLockAccessCodeConfigInput;
 
   return {
     name: parsedConfig.name ?? defaultConfig.name,
@@ -137,5 +340,6 @@ export function parseConfig(config: Record<string, unknown>): TTLockAccessCodeCo
     advancedOptions: {
       waitTimeUpdate: parsedConfig.waitTimeUpdate ?? defaultConfig.advancedOptions.waitTimeUpdate,
     },
+    externalDoors: parseExternalDoorsConfig(parsedConfig.externalDoors),
   };
 }

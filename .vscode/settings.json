@@ -1,8 +1,12 @@
 {
-  "files.eol": "\r\n",
+  "files.eol": "\n",
   "editor.codeActionsOnSave": {
     "source.fixAll.eslint": "explicit"
   },
   "editor.rulers": [ 140 ],
-  "eslint.enable": true
+  "eslint.enable": true,
+  "eslint.validate": [
+    "javascript",
+    "typescript"
+  ]
 }

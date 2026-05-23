@@ -53,6 +53,14 @@ type ApiErrorPayload = {
   errmsg?: string;
 };
 
+export type TTLockSetupLock = {
+  battery?: number | undefined;
+  id: string;
+  mac?: string | undefined;
+  name: string;
+  passcodeSupported: boolean;
+};
+
 export class TTLockApi {
   private apiClient: AxiosInstance;
   public accessToken: string | null = null;
@@ -513,6 +521,40 @@ export class TTLockApi {
 
   private isObject(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
+  }
+
+  public async listLocksForSetup(): Promise<TTLockSetupLock[]> {
+    const response = await this.makeAuthenticatedRequest<{
+      list: { electricQuantity?: number; featureValue?: string; lockAlias?: string; lockId: string | number; lockMac?: string }[];
+      pageNo: number;
+      pageSize: number;
+      pages: number;
+      total: number;
+    }>('lock/list', 'GET', { pageNo: 1, pageSize: 1000 });
+
+    if (!response.list || !Array.isArray(response.list)) {
+      this.log.error('Invalid response format: expected list of locks');
+      throw new TTLockApiError(
+        'Invalid response format: expected list of locks',
+        TTLockApiErrorCategory.InvalidResponse,
+        false,
+        'lock/list',
+      );
+    }
+
+    const locks: TTLockSetupLock[] = [];
+    for (const lock of response.list) {
+      const featureInfo = await this.getFeatureInfo(lock.featureValue ?? '');
+      const id = lock.lockId.toString();
+      locks.push({
+        battery: lock.electricQuantity,
+        id,
+        mac: lock.lockMac,
+        name: lock.lockAlias || id,
+        passcodeSupported: featureInfo.passcode,
+      });
+    }
+    return locks;
   }
 
   public async getDevices(): Promise<TTLockDevice[]> {
