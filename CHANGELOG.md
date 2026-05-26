@@ -1,9 +1,13 @@
 # Changelog
-## [v2.4.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.4.0-beta.0)
+## [v2.4.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.4.0-beta.0) (2026-05-26)
 
 ### Featured Changes
 
 - [enhancement] Add Battery Service for DIRIGERA Doors [14f0c75](https://github.com/ZeliardM/homebridge-ttlock-accesscode/commit/14f0c753ff42c32ed15c6ab02ef4d8e34a870b8e) (@ZeliardM)
+
+### Other Changes
+
+- Update CHANGELOG.md for beta release v2.4.0-beta.0 [beta-release] (@github-actions)
 
 **Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.3.0...v2.4.0-beta.0
 
