@@ -41,6 +41,7 @@ export type TTLockAccessoryContext = {
 export type ManualDoorAccessoryContext = {
   kind: 'manualDoor';
   lastSeen?: Date;
+  manualDoorBatteryPercentage?: number;
   manualDoorId?: string;
   manualDoorLinkedLockId?: string;
   manualDoorOpen?: boolean;

@@ -16,6 +16,8 @@ import { prefixLogger } from '../utils.js';
 
 const CLOSED_POSITION = 0;
 const OPEN_POSITION = 100;
+const DEFAULT_BATTERY_LEVEL = 100;
+const LOW_BATTERY_THRESHOLD = 20;
 
 export type DoorGuardState = {
   canOperate: boolean;
@@ -25,8 +27,10 @@ export type DoorGuardState = {
 export default class HomeKitDeviceDoor {
   public readonly log: Logger;
   public readonly homebridgeAccessory: PlatformAccessory<ManualDoorAccessoryContext>;
+  private readonly batteryService: Service;
   private readonly doorService: Service;
   private available = false;
+  private batteryLevel: number | undefined;
   private contactOpen?: boolean;
   private hasReportedState = false;
   private lastUnavailableReason: string | undefined;
@@ -38,6 +42,7 @@ export default class HomeKitDeviceDoor {
     this.log = prefixLogger(this.platform.log, `[${this.name}]`);
     this.homebridgeAccessory = this.initializeAccessory();
     this.doorService = this.setupDoorService();
+    this.batteryService = this.setupBatteryService();
     this.updateAccessoryInformation();
     this.homebridgeAccessory.on(PlatformAccessoryEvent.IDENTIFY, () => this.identify());
     this.syncCharacteristics();
@@ -81,6 +86,7 @@ export default class HomeKitDeviceDoor {
 
   public applySensorUpdate(update: DirigeraDoorSensorUpdate): void {
     const previousOpen = this.contactOpen;
+    const previousBatteryLevel = this.batteryLevel;
     const wasAvailable = this.available;
 
     this.contactOpen = update.isOpen;
@@ -90,6 +96,10 @@ export default class HomeKitDeviceDoor {
     this.homebridgeAccessory.context.lastSeen = new Date();
     this.homebridgeAccessory.context.offline = !this.available;
     this.homebridgeAccessory.context.manualDoorOpen = this.contactOpen;
+    if (typeof update.batteryPercentage === 'number') {
+      this.batteryLevel = this.normalizeBatteryLevel(update.batteryPercentage);
+      this.homebridgeAccessory.context.manualDoorBatteryPercentage = this.batteryLevel;
+    }
 
     if (previousOpen === undefined) {
       this.log.info(`Manual door [${this.name}] is ${this.contactOpen ? 'open' : 'closed'} from DIRIGERA sensor [${this.sensorId}]`);
@@ -100,7 +110,7 @@ export default class HomeKitDeviceDoor {
     }
 
     this.syncCharacteristics();
-    if (!wasAvailable || previousOpen !== this.contactOpen) {
+    if (!wasAvailable || previousOpen !== this.contactOpen || previousBatteryLevel !== this.batteryLevel) {
       this.platform.api.updatePlatformAccessories([this.homebridgeAccessory]);
     }
   }
@@ -164,12 +174,22 @@ export default class HomeKitDeviceDoor {
       this.platform.registerPlatformAccessory(accessory);
     }
 
+    const cachedSensorId = accessory.context.manualDoorSensorId;
+    const sensorUnchanged = cachedSensorId === this.sensorId;
+
     accessory.context.kind = 'manualDoor';
     accessory.context.manualDoorId = this.id;
     accessory.context.manualDoorSensorId = this.sensorId;
     accessory.context.manualDoorLinkedLockId = this.linkedLockId;
-    if (typeof accessory.context.manualDoorOpen === 'boolean') {
+    if (sensorUnchanged && typeof accessory.context.manualDoorOpen === 'boolean') {
       this.contactOpen = accessory.context.manualDoorOpen;
+    } else {
+      delete accessory.context.manualDoorOpen;
+    }
+    if (sensorUnchanged && typeof accessory.context.manualDoorBatteryPercentage === 'number') {
+      this.batteryLevel = this.normalizeBatteryLevel(accessory.context.manualDoorBatteryPercentage);
+    } else {
+      delete accessory.context.manualDoorBatteryPercentage;
     }
 
     if (accessory.context.lastSeen) {
@@ -206,6 +226,25 @@ export default class HomeKitDeviceDoor {
 
     service.getCharacteristic(C.StatusFault)
       .onGet(() => this.getStatusFault());
+
+    return service;
+  }
+
+  private setupBatteryService(): Service {
+    const S = this.platform.Service;
+    const C = this.platform.Characteristic;
+    const service = this.homebridgeAccessory.getService(S.Battery) ?? this.addService(S.Battery, `${this.name} Battery`);
+
+    service.getCharacteristic(C.BatteryLevel)
+      .onGet(() => this.getBatteryLevel());
+
+    service.getCharacteristic(C.StatusLowBattery)
+      .onGet(() => this.getStatusLowBattery());
+
+    service.getCharacteristic(C.ChargingState)
+      .onGet(() => C.ChargingState.NOT_CHARGEABLE);
+
+    this.doorService.addLinkedService(service);
 
     return service;
   }
@@ -247,6 +286,18 @@ export default class HomeKitDeviceDoor {
     return this.available ? C.StatusFault.NO_FAULT : C.StatusFault.GENERAL_FAULT;
   }
 
+  private getBatteryLevel(): CharacteristicValue {
+    return this.batteryLevel ?? DEFAULT_BATTERY_LEVEL;
+  }
+
+  private getStatusLowBattery(): CharacteristicValue {
+    const C = this.platform.Characteristic;
+    const batteryLevel = this.batteryLevel ?? DEFAULT_BATTERY_LEVEL;
+    return batteryLevel < LOW_BATTERY_THRESHOLD
+      ? C.StatusLowBattery.BATTERY_LEVEL_LOW
+      : C.StatusLowBattery.BATTERY_LEVEL_NORMAL;
+  }
+
   private syncCharacteristics(): void {
     const C = this.platform.Characteristic;
 
@@ -263,6 +314,13 @@ export default class HomeKitDeviceDoor {
     this.doorService.getCharacteristic(C.PositionState).updateValue(C.PositionState.STOPPED);
     this.doorService.getCharacteristic(C.StatusActive).updateValue(this.available);
     this.doorService.getCharacteristic(C.StatusFault).updateValue(this.getStatusFault());
+    this.batteryService.getCharacteristic(C.BatteryLevel).updateValue(this.getBatteryLevel());
+    this.batteryService.getCharacteristic(C.StatusLowBattery).updateValue(this.getStatusLowBattery());
+    this.batteryService.getCharacteristic(C.ChargingState).updateValue(C.ChargingState.NOT_CHARGEABLE);
+  }
+
+  private normalizeBatteryLevel(value: number): number {
+    return Math.min(100, Math.max(0, Math.round(value)));
   }
 
   private getUnavailableError(): Error {
