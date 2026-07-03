@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- npm(deps): bump axios from 1.18.0 to 1.18.1 [#97](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/97) (@dependabot[bot])
 - Bump form-data from 4.0.5 to 4.0.6 in the npm_and_yarn group across 1 directory [#94](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/94) (@dependabot[bot])
 - npm-dev(deps-dev): bump typescript-eslint from 8.61.0 to 8.61.1 [#92](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/92) (@dependabot[bot])
 - npm(deps): bump axios from 1.17.0 to 1.18.0 [#91](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/91) (@dependabot[bot])
