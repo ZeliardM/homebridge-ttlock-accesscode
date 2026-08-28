@@ -71,7 +71,7 @@
     }
   ],
   "dependencies": {
-    "@homebridge/plugin-ui-utils": "^2.2.5",
+    "@homebridge/plugin-ui-utils": "^2.2.6",
     "axios": "^1.19.0",
     "ber-tlv": "^0.9.2",
     "dirigera": "^1.8.1"
