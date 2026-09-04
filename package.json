@@ -74,7 +74,7 @@
     "@homebridge/plugin-ui-utils": "^2.2.6",
     "axios": "^1.19.0",
     "ber-tlv": "^0.9.2",
-    "dirigera": "^1.8.1"
+    "dirigera": "^2.0.0"
   },
   "overrides": {
     "node-persist": "^4.0.4"
