@@ -627,14 +627,20 @@ export class TTLockApi {
   public async getSysInfo(lockId: string): Promise<Partial<SysInfo>> {
     this.log.debug(`Fetching sys_info for lock: ${lockId}`);
     const sysInfo: Partial<SysInfo> = {};
-    const stateResponse = await this.makeAuthenticatedRequest<{ state: number }>('lock/queryOpenState', 'GET', { lockId });
-    const batteryResponse = await this.makeAuthenticatedRequest<{
-      electricQuantity: number;
-    }>(
-      'lock/queryElectricQuantity',
-      'GET',
-      { lockId },
-    );
+    const stateResponse = await this.makeAuthenticatedRequest<{
+      state: number;
+      electricQuantity?: number;
+    }>('lock/queryOpenState', 'GET', { lockId });
+    // lock/queryOpenState also returns electricQuantity; only make the extra call if it is missing
+    const batteryResponse = typeof stateResponse.electricQuantity === 'number'
+      ? { electricQuantity: stateResponse.electricQuantity }
+      : await this.makeAuthenticatedRequest<{
+        electricQuantity: number;
+      }>(
+        'lock/queryElectricQuantity',
+        'GET',
+        { lockId },
+      );
     sysInfo.state = stateResponse.state === 0 ? 1 : stateResponse.state === 1 ? 0 : stateResponse.state;
     sysInfo.battery = batteryResponse.electricQuantity;
     return sysInfo;
