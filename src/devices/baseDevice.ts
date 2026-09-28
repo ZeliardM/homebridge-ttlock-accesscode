@@ -388,6 +388,22 @@ export default abstract class HomeKitDevice {
       return;
     }
     const context = this.buildDescriptorContext();
+    if (descriptor.type === this.platform.Characteristic.LockTargetState) {
+      // Lock commands go through the gateway and can take far longer than HomeKit waits (~10s)
+      // before showing "No Response", so answer HomeKit right away and revert the target state
+      // if the command does not complete.
+      void this.executeDescriptorSet(service, descriptor, value, context)
+        .catch(error => this.log.error(`${context.alias}: lock command error`, error))
+        .then(() => {
+          const current = descriptor.getCurrent(context);
+          if (current !== Number(value)) {
+            const action = Number(value) === 1 ? 'lock' : 'unlock';
+            this.log.warn(`${context.alias}: ${action} did not complete; reverting HomeKit to current state`);
+            service.getCharacteristic(descriptor.type).updateValue(current);
+          }
+        });
+      return;
+    }
     const result = await this.executeDescriptorSet(service, descriptor, value, context);
     if (result !== undefined) {
       return result;
