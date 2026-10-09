@@ -69,8 +69,14 @@ export class TTLockApi {
   private usageTracker: UsageTracker | undefined;
   private authUsername: string | null = null;
   private authPassword: string | null = null;
-  private readonly requestTimeoutMs = 15000;
+  // lock/queryOpenState and lock commands go through the gateway to the lock over Bluetooth and can take 15s+
+  private readonly requestTimeoutMs = 25000;
   private readonly maxRetries = 3;
+  // Locks behind one gateway can only be reached one at a time; concurrent requests get errcode -3003 (gateway busy)
+  private requestMutex = new SimpleMutex();
+  private lastRequestAt = 0;
+  private readonly minRequestGapMs = 1000;
+  private static readonly gatewayLockEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
 
   constructor(private log: Logging, private clientId: string, private clientSecret: string, usageTracker?: UsageTracker) {
     this.apiClient = axios.create({
@@ -223,6 +229,20 @@ export class TTLockApi {
   }
 
   private async makeAuthenticatedRequest<T>(endpoint: string, method: 'GET' | 'POST' = 'GET', data?: Record<string, unknown>): Promise<T> {
+    const release = await this.requestMutex.acquire();
+    try {
+      const wait = this.lastRequestAt + this.minRequestGapMs - Date.now();
+      if (wait > 0) {
+        await this.sleep(wait);
+      }
+      return await this.sendAuthenticatedRequest<T>(endpoint, method, data);
+    } finally {
+      this.lastRequestAt = Date.now();
+      release();
+    }
+  }
+
+  private async sendAuthenticatedRequest<T>(endpoint: string, method: 'GET' | 'POST' = 'GET', data?: Record<string, unknown>): Promise<T> {
     const fullEndpoint = `v3/${endpoint}`;
     let authRecoveryAttempted = false;
     let lastError: TTLockApiError | undefined;
@@ -367,6 +387,27 @@ export class TTLockApi {
       return new TTLockApiError(
         `TTLock rate limit error: ${errmsg}`,
         TTLockApiErrorCategory.RateLimited,
+        true,
+        endpoint,
+        undefined,
+        errcode,
+      );
+    }
+    if (errcode === -3003) {
+      return new TTLockApiError(
+        `TTLock gateway busy: ${errmsg}`,
+        TTLockApiErrorCategory.ServerTransient,
+        true,
+        endpoint,
+        undefined,
+        errcode,
+      );
+    }
+    // errcode 1 ("failed or means no") on these endpoints means the gateway could not reach the lock this time
+    if (errcode === 1 && TTLockApi.gatewayLockEndpoints.includes(endpoint)) {
+      return new TTLockApiError(
+        `TTLock gateway could not reach lock: ${errmsg}`,
+        TTLockApiErrorCategory.ServerTransient,
         true,
         endpoint,
         undefined,
