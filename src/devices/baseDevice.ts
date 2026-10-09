@@ -33,6 +33,7 @@ export default abstract class HomeKitDevice {
   public isUpdating = false;
   protected previousSnapshot?: TTLockDevice;
   protected pollingInterval: NodeJS.Timeout | undefined;
+  private pollingStartTimer: NodeJS.Timeout | undefined;
   protected updateEmitter = new EventEmitter();
   private consecutivePollFailures = 0;
   private readonly maxConsecutivePollFailures = 3;
@@ -259,24 +260,38 @@ export default abstract class HomeKitDevice {
       await this.stopPolling();
       return;
     }
-    if (this.pollingInterval) {
-      clearInterval(this.pollingInterval);
-    }
+    this.clearPollingTimers();
     const deviceCount = this.platform.getTTLockAccessoryCount();
     const userIntervalMs = this.platform.config.discoveryOptions.pollingInterval;
     const effectiveInterval = this.platform.computeEffectivePollingInterval(deviceCount, userIntervalMs);
-    this.log.debug(`Starting polling with interval ${effectiveInterval}ms`);
-    this.pollingInterval = setInterval(
-      () => void this.refreshAndUpdateCharacteristics(false),
-      effectiveInterval,
-    );
+    // Spread the locks' polls across the interval: locks sharing a gateway that are polled at the same
+    // moment make the gateway answer "busy". Every lock still gets its first poll within one interval.
+    const { index, count } = this.platform.getPollingSlot(this.ttlockDevice.sys_info.device_id);
+    const firstPollDelay = Math.floor((effectiveInterval * (index + 1)) / count);
+    this.log.debug(`Starting polling with interval ${effectiveInterval}ms, first poll in ${firstPollDelay}ms`);
+    this.pollingStartTimer = setTimeout(() => {
+      this.pollingStartTimer = undefined;
+      void this.refreshAndUpdateCharacteristics(false);
+      this.pollingInterval = setInterval(
+        () => void this.refreshAndUpdateCharacteristics(false),
+        effectiveInterval,
+      );
+    }, firstPollDelay);
   }
 
-  public async stopPolling(waitForCurrentUpdate = false): Promise<void> {
+  private clearPollingTimers(): void {
+    if (this.pollingStartTimer) {
+      clearTimeout(this.pollingStartTimer);
+      this.pollingStartTimer = undefined;
+    }
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);
       this.pollingInterval = undefined;
     }
+  }
+
+  public async stopPolling(waitForCurrentUpdate = false): Promise<void> {
+    this.clearPollingTimers();
     if (waitForCurrentUpdate && this.isUpdating) {
       await new Promise<void>(resolve => {
         this.updateEmitter.once('updateComplete', resolve);
@@ -388,10 +403,43 @@ export default abstract class HomeKitDevice {
       return;
     }
     const context = this.buildDescriptorContext();
+    const refusal = descriptor.checkSet?.(value, context);
+    if (refusal) {
+      // Nothing is sent to TTLock. Bounce HomeKit back to the real state: HAP stores the requested value after
+      // this handler returns, so the revert has to come after that or it is overwritten.
+      setImmediate(() => this.revertTargetIfNeeded(service, descriptor, value));
+      return;
+    }
+    if (descriptor.applySetInBackground) {
+      // HomeKit shows "No Response" after about 10s, and lock commands through a gateway can take longer.
+      // Answer now; if the command does not take effect, put the target back to the lock's real state.
+      // The revert waits a tick as well: a command that fails at once could otherwise finish before HAP stores the value.
+      void this.executeDescriptorSet(service, descriptor, value, context)
+        .catch(error => this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error))
+        .then(() => setImmediate(() => this.revertTargetIfNeeded(service, descriptor, value, true)));
+      return;
+    }
     const result = await this.executeDescriptorSet(service, descriptor, value, context);
     if (result !== undefined) {
       return result;
     }
+  }
+
+  private revertTargetIfNeeded(
+    service: Service,
+    descriptor: CharacteristicDescriptor,
+    requested: CharacteristicValue,
+    logRevert = false,
+  ): void {
+    // Read the lock's state as it is now, not as it was when the command started
+    const current = descriptor.getCurrent(this.buildDescriptorContext());
+    if (current === requested) {
+      return;
+    }
+    if (logRevert) {
+      this.log.warn(`${descriptor.name ?? descriptor.type.UUID} did not change to ${requested}; reverting HomeKit to ${current}`);
+    }
+    service.getCharacteristic(descriptor.type).updateValue(current);
   }
 
   private async executeDescriptorSet(

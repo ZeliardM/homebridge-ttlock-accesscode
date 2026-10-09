@@ -16,6 +16,14 @@ import type { TTLockApi } from '../api/ttlockApi.js';
 
 export const deviceEventEmitter = new EventEmitter();
 
+// A lock command refused by the door safety block before it was sent
+export class LockCommandBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LockCommandBlockedError';
+  }
+}
+
 export default class DeviceManager {
   private readonly api: TTLockApi;
   private readonly dirigeraApis: DirigeraApi[] = [];
@@ -216,18 +224,28 @@ export default class DeviceManager {
     feature: string,
     action: string,
   ): Promise<void> {
+    // Checked again before every attempt: a retried command can be sent well after the first check
+    const ensureNotBlocked = () => {
+      const blockReason = this.getLockCommandBlockReason(deviceId);
+      if (blockReason) {
+        throw new LockCommandBlockedError(blockReason);
+      }
+    };
     try {
       switch (action) {
         case 'lock':
-          await this.api.lock(deviceId);
+          await this.api.lock(deviceId, ensureNotBlocked);
           break;
         case 'unlock':
-          await this.api.unlock(deviceId);
+          await this.api.unlock(deviceId, ensureNotBlocked);
           break;
         default:
           throw new Error(`Unsupported action: ${action} for feature: ${feature}`);
       }
     } catch (error) {
+      if (error instanceof LockCommandBlockedError) {
+        throw error;
+      }
       this.log.error(`Failed to perform action ${action} on device ${deviceId} for feature ${feature}:`, error);
       throw error;
     }

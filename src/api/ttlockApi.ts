@@ -22,6 +22,8 @@ export enum TTLockApiErrorCategory {
 
 export class TTLockApiError extends Error {
   public wasLogged = false;
+  // The gateway was busy or could not reach the lock; the request is safe to send again
+  public gatewayTransient = false;
 
   constructor(
     message: string,
@@ -53,6 +55,15 @@ type ApiErrorPayload = {
   errmsg?: string;
 };
 
+type RequestOptions = {
+  // Retry gateway busy / lock unreachable errors (only lock commands; a failed poll waits for the next poll)
+  retryGatewayErrors?: boolean;
+  // Only retry if the retry, including its timeout, could finish within this many ms of the first attempt
+  deadlineMs?: number;
+  // Runs before every attempt; throw to abort the request without sending it
+  beforeAttempt?: (() => void) | undefined;
+};
+
 export type TTLockSetupLock = {
   battery?: number | undefined;
   id: string;
@@ -70,7 +81,13 @@ export class TTLockApi {
   private authUsername: string | null = null;
   private authPassword: string | null = null;
   private readonly requestTimeoutMs = 15000;
+  // These endpoints reach the lock through its gateway over Bluetooth and can take 15s+
+  private readonly gatewayRequestTimeoutMs = 25000;
   private readonly maxRetries = 3;
+  // A lock command is not retried unless the retry could finish within this long of the first attempt,
+  // so a lock never moves long after it was asked to
+  private readonly lockCommandDeadlineMs = 45000;
+  private static readonly gatewayEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
 
   constructor(private log: Logging, private clientId: string, private clientSecret: string, usageTracker?: UsageTracker) {
     this.apiClient = axios.create({
@@ -222,8 +239,15 @@ export class TTLockApi {
     }
   }
 
-  private async makeAuthenticatedRequest<T>(endpoint: string, method: 'GET' | 'POST' = 'GET', data?: Record<string, unknown>): Promise<T> {
+  private async makeAuthenticatedRequest<T>(
+    endpoint: string,
+    method: 'GET' | 'POST' = 'GET',
+    data?: Record<string, unknown>,
+    options: RequestOptions = {},
+  ): Promise<T> {
     const fullEndpoint = `v3/${endpoint}`;
+    const timeout = TTLockApi.gatewayEndpoints.includes(endpoint) ? this.gatewayRequestTimeoutMs : this.requestTimeoutMs;
+    const startedAt = Date.now();
     let authRecoveryAttempted = false;
     let lastError: TTLockApiError | undefined;
 
@@ -239,22 +263,12 @@ export class TTLockApi {
       );
     }
 
-    if (this.usageTracker) {
-      const consumedReserved = await this.usageTracker.consumePendingReservation(1);
-      if (!consumedReserved) {
-        const ok = await this.usageTracker.tryReserve(1, `request:${endpoint}`);
-        if (!ok) {
-          throw new TTLockApiError(
-            `API usage budget exhausted (${endpoint})`,
-            TTLockApiErrorCategory.BudgetExhausted,
-            false,
-            endpoint,
-          );
-        }
-      }
-    }
-
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      // Outside the try: a guard that refuses the request must not be retried
+      options.beforeAttempt?.();
+      // Every attempt is a real API call, so every attempt counts against the budget
+      await this.reserveApiCall(endpoint, attempt === 0);
+
       let attemptedToken: string | null = this.accessToken;
       try {
         attemptedToken = this.accessToken;
@@ -268,6 +282,7 @@ export class TTLockApi {
         const response = await this.apiClient.request({
           url: fullEndpoint,
           method,
+          timeout,
           headers: {
             Authorization: `Bearer ${this.accessToken}`,
           },
@@ -303,8 +318,11 @@ export class TTLockApi {
         }
 
         const isLastAttempt = attempt >= this.maxRetries;
-        if (!isLastAttempt && normalized.retryable) {
-          const delay = this.getRetryDelayMs(attempt);
+        const retryable = normalized.retryable || (normalized.gatewayTransient && options.retryGatewayErrors === true);
+        const delay = this.getRetryDelayMs(attempt);
+        const pastDeadline = options.deadlineMs !== undefined &&
+          Date.now() - startedAt + delay + timeout > options.deadlineMs;
+        if (!isLastAttempt && retryable && !pastDeadline) {
           this.log.warn(
             `Retryable TTLock API error on ${endpoint}; category=${normalized.category}; ` +
             `attempt=${attempt + 1}/${this.maxRetries + 1}; retrying in ${delay}ms`,
@@ -326,12 +344,37 @@ export class TTLockApi {
     throw new TTLockApiError('Max retries reached', TTLockApiErrorCategory.Unknown, false, endpoint);
   }
 
+  private async reserveApiCall(endpoint: string, firstAttempt: boolean): Promise<void> {
+    if (!this.usageTracker) {
+      return;
+    }
+    // Discovery reserves its calls up front; only the first attempt of a request may use that reservation
+    if (firstAttempt && await this.usageTracker.consumePendingReservation(1)) {
+      return;
+    }
+    const reason = firstAttempt ? `request:${endpoint}` : `retry:${endpoint}`;
+    if (!await this.usageTracker.tryReserve(1, reason)) {
+      throw new TTLockApiError(
+        `API usage budget exhausted (${endpoint})`,
+        TTLockApiErrorCategory.BudgetExhausted,
+        false,
+        endpoint,
+      );
+    }
+  }
+
   private logApiError(message: string, error: TTLockApiError): void {
     if (error.wasLogged) {
       return;
     }
 
     error.wasLogged = true;
+    if (error.gatewayTransient) {
+      this.log.warn(
+        `${message}: ${error.message} (endpoint=${error.endpoint ?? 'unknown'} errcode=${error.errcode ?? 'n/a'}).`,
+      );
+      return;
+    }
     if (this.isGatewayOfflineError(error)) {
       this.log.warn(
         `${message}: gateway offline (endpoint=${error.endpoint ?? 'unknown'} errcode=${error.errcode ?? 'n/a'}). ` +
@@ -372,6 +415,20 @@ export class TTLockApi {
         undefined,
         errcode,
       );
+    }
+    // -3003: the gateway is busy. errcode 1 ("failed or means no") on a gateway endpoint: the gateway could not
+    // reach the lock this time. Gateway endpoints are reads or idempotent lock/unlock, so sending them again is safe.
+    if (errcode === -3003 || (errcode === 1 && TTLockApi.gatewayEndpoints.includes(endpoint))) {
+      const error = new TTLockApiError(
+        errcode === -3003 ? `TTLock gateway busy: ${errmsg}` : `TTLock gateway could not reach the lock: ${errmsg}`,
+        TTLockApiErrorCategory.ServerTransient,
+        false,
+        endpoint,
+        undefined,
+        errcode,
+      );
+      error.gatewayTransient = true;
+      return error;
     }
     return new TTLockApiError(
       `TTLock API returned errcode=${errcode ?? 'n/a'} errmsg=${errmsg}`,
@@ -608,7 +665,7 @@ export class TTLockApi {
       hardwareRevision: string;
       modelNum: string;
     }>('lock/detail', 'GET', { lockId });
-    const stateResponse = await this.makeAuthenticatedRequest<{ state: number }>('lock/queryOpenState', 'GET', { lockId });
+    const stateResponse = await this.queryStateForDiscovery(lockId);
     if (!detailResponse.firmwareRevision || !detailResponse.hardwareRevision || !detailResponse.modelNum) {
       throw new TTLockApiError(
         `Invalid lock/detail response for lockId=${lockId}`,
@@ -620,8 +677,29 @@ export class TTLockApi {
     sysInfo.fw_ver = detailResponse.firmwareRevision.split('.').slice(0, 3).join('.');
     sysInfo.hw_ver = detailResponse.hardwareRevision;
     sysInfo.model = detailResponse.modelNum;
-    sysInfo.state = stateResponse.state === 0 ? 1 : stateResponse.state === 1 ? 0 : stateResponse.state;
+    if (stateResponse) {
+      sysInfo.state = stateResponse.state === 0 ? 1 : stateResponse.state === 1 ? 0 : stateResponse.state;
+    }
     return sysInfo;
+  }
+
+  // A busy gateway or a lock it briefly cannot reach must not drop the lock until the next discovery (12h by
+  // default). Return undefined instead, so the lock is kept and the next poll fills in its state.
+  private async queryStateForDiscovery(lockId: string): Promise<{ state: number } | undefined> {
+    try {
+      return await this.makeAuthenticatedRequest<{ state: number }>('lock/queryOpenState', 'GET', { lockId });
+    } catch (error) {
+      const temporary = error instanceof TTLockApiError && (
+        error.gatewayTransient ||
+        error.category === TTLockApiErrorCategory.NetworkTransient ||
+        error.category === TTLockApiErrorCategory.ServerTransient
+      );
+      if (!temporary) {
+        throw error;
+      }
+      this.log.warn(`Could not read the state of lock ${lockId} during discovery (${error.message}); keeping the lock`);
+      return undefined;
+    }
   }
 
   public async getSysInfo(lockId: string): Promise<Partial<SysInfo>> {
@@ -666,16 +744,21 @@ export class TTLockApi {
     }
   }
 
-  public async lock(lockId: string): Promise<void> {
+  // beforeAttempt runs before every attempt, including retries, so a safety check can stop a retry
+  public async lock(lockId: string, beforeAttempt?: () => void): Promise<void> {
     this.log.debug(`Locking lock: ${lockId}`);
-    await this.makeAuthenticatedRequest('lock/lock', 'POST', { lockId });
+    await this.makeAuthenticatedRequest('lock/lock', 'POST', { lockId }, this.lockCommandOptions(beforeAttempt));
     this.log.debug(`Lock ${lockId} locked`);
   }
 
-  public async unlock(lockId: string): Promise<void> {
+  public async unlock(lockId: string, beforeAttempt?: () => void): Promise<void> {
     this.log.debug(`Unlocking lock: ${lockId}`);
-    await this.makeAuthenticatedRequest('lock/unlock', 'POST', { lockId });
+    await this.makeAuthenticatedRequest('lock/unlock', 'POST', { lockId }, this.lockCommandOptions(beforeAttempt));
     this.log.debug(`Lock ${lockId} unlocked`);
+  }
+
+  private lockCommandOptions(beforeAttempt?: () => void): RequestOptions {
+    return { retryGatewayErrors: true, deadlineMs: this.lockCommandDeadlineMs, beforeAttempt };
   }
 
   public async getPasscodes(lockId: string): Promise<Passcode[]> {

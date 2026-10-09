@@ -51,4 +51,8 @@ export interface CharacteristicDescriptor {
   getInitial(context: DescriptorContext): CharacteristicValue;
   getCurrent(context: DescriptorContext): CharacteristicValue;
   applySet?(value: CharacteristicValue, context: DescriptorContext): Promise<void | string>;
+  // Returns a reason to refuse the set before HomeKit is answered, or undefined to allow it
+  checkSet?: ((value: CharacteristicValue, context: DescriptorContext) => string | undefined) | undefined;
+  // Answer HomeKit right away and run applySet in the background (for commands slower than HomeKit waits)
+  applySetInBackground?: boolean;
 }

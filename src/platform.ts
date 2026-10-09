@@ -401,6 +401,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     if (existingDevice) {
       if (!existingDevice.isUpdating) {
         const comingOnline = existingDevice.ttlockDevice.offline && !device.offline;
+        if (device.sys_info.state === undefined) {
+          // Discovery could not read the state this time; keep the last known one
+          device.sys_info.state = existingDevice.ttlockDevice.sys_info.state;
+        }
         existingDevice.ttlockDevice.sys_info = device.sys_info;
         existingDevice.ttlockDevice.feature_info = device.feature_info;
         existingDevice.ttlockDevice.last_seen = device.last_seen;
@@ -423,6 +427,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
   private async addNewDevice(device: TTLockDevice): Promise<void> {
     this.log.debug(`New device [${device.sys_info.device_id}] found, adding to HomeKit.`);
+    if (device.sys_info.state === undefined) {
+      // Discovery could not read the state; show it as unknown until the first poll reads it
+      device.sys_info.state = this.Characteristic.LockCurrentState.UNKNOWN;
+    }
     await this.foundDevice(device);
   }
 
@@ -529,6 +537,14 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const finalSec = Math.min(Math.max(basePollingIntervalSec * multiplier, minPollSec), maxPollSec);
     const finalMs = Math.floor(finalSec * 1000);
     return Math.max(userIntervalMs, finalMs);
+  }
+
+  // Position of a lock among all locks, used to spread their polls across the polling interval
+  public getPollingSlot(deviceId: string): { index: number; count: number } {
+    const deviceIds = Array.from(this.configuredAccessories.values())
+      .flatMap(accessory => (accessory.context.kind !== 'manualDoor' && accessory.context.deviceId) ? [accessory.context.deviceId] : [])
+      .sort();
+    return { index: Math.max(0, deviceIds.indexOf(deviceId)), count: Math.max(1, deviceIds.length) };
   }
 
   public getTTLockAccessoryCount(): number {

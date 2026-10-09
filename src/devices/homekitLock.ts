@@ -4,6 +4,7 @@ import type { CharacteristicValue, Service, WithUUID } from 'homebridge';
 import pkg from 'ber-tlv';
 
 import HomeKitDevice from './baseDevice.js';
+import { LockCommandBlockedError } from './deviceManager.js';
 import {
   buildAccessCodeDescriptors,
   buildBatteryDescriptors,
@@ -47,14 +48,26 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       return buildLockDescriptors(
         C,
         async (value, context) => {
+          const action = Number(value) === C.LockTargetState.SECURED ? 'lock' : 'unlock';
+          try {
+            await this.deviceManager!.controlDevice(context.device.device_id, 'state', value);
+          } catch (error) {
+            // The door changed while the command was waiting or retrying
+            if (error instanceof LockCommandBlockedError) {
+              this.log.warn(`Stopped ${action} command for ${context.alias}: ${error.message}`);
+              return false;
+            }
+            throw error;
+          }
+          return true;
+        },
+        (value, context) => {
           const blockReason = this.deviceManager?.getLockCommandBlockReason(context.device.device_id);
           if (blockReason) {
             const action = Number(value) === C.LockTargetState.SECURED ? 'lock' : 'unlock';
             this.log.warn(`Ignoring ${action} command for ${context.alias}: ${blockReason}`);
-            return false;
           }
-          await this.deviceManager!.controlDevice(context.device.device_id, 'state', value);
-          return true;
+          return blockReason;
         },
       );
     }
