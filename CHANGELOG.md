@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- npm-dev(deps-dev): bump eslint from 10.12.0 to 10.13.0 [#150](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/150) (@dependabot[bot])
 - npm-dev(deps-dev): bump typescript-eslint from 8.71.2 to 8.72.0 [#149](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/149) (@dependabot[bot])
 - npm-dev(deps-dev): bump typescript-eslint from 8.71.1 to 8.71.2 [#146](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/146) (@dependabot[bot])
 - npm-dev(deps-dev): bump typescript-eslint from 8.71.0 to 8.71.1 [#145](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/145) (@dependabot[bot])
