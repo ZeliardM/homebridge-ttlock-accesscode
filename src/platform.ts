@@ -30,6 +30,7 @@ import { UsageTracker } from './api/usageTracker.js';
 import { deviceEventEmitter } from './devices/deviceManager.js';
 import type { TTLockAccessCodeConfig } from './config.js';
 import type { TTLockDevice } from './devices/deviceTypes.js';
+import type { PackageConfig } from './utils.js';
 
 export type TTLockAccessoryContext = {
   kind?: 'ttlock';
@@ -51,7 +52,7 @@ export type ManualDoorAccessoryContext = {
 
 export type TTLockAccessCodeAccessoryContext = TTLockAccessoryContext | ManualDoorAccessoryContext;
 
-let packageConfig: { name: string; version: string; engines: { node: string } };
+let packageConfig: PackageConfig;
 
 export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic;
@@ -95,10 +96,21 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     this.setupDeviceEventEmitter('firstDiscovery');
 
     this.platformInitialization = this.initializePlatform();
+    // Handled in the didFinishLaunching listener; without this, a failure before that listener runs is an
+    // unhandled rejection, which stops Homebridge
+    this.platformInitialization.catch(() => undefined);
 
     this.api.on('didFinishLaunching', async () => {
       this.log.debug('TTLockAccessCode Platform finished launching');
-      await this.platformInitialization;
+      try {
+        await this.platformInitialization;
+      } catch (error) {
+        this.log.error(
+          `Platform initialization failed, so ${PLATFORM_NAME} will not start: ` +
+          (error instanceof Error ? error.message : String(error)),
+        );
+        return;
+      }
       if (this.configInvalid) {
         return;
       }
@@ -183,19 +195,14 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       }
 
       this.log.debug('Checking Homebridge version');
-      if (
-        this.api.versionGreaterOrEqual &&
-        !(
-          this.api.versionGreaterOrEqual('1.8.0') ||
-          this.api.versionGreaterOrEqual('2.0.0')
-        )
-      ) {
+      if (!satisfiesVersion(this.api.serverVersion, packageConfig.engines.homebridge)) {
         throw new Error(
-          `homebridge-ttlock-accesscode requires Homebridge ^1.8.0 || ^2.0.0-beta.0. Currently running: ${this.api.serverVersion}`,
+          `homebridge-ttlock-accesscode requires Homebridge ${packageConfig.engines.homebridge}. ` +
+          `Currently running: ${this.api.serverVersion}`,
         );
       } else {
         this.log.debug(
-          `Homebridge version ${this.api.serverVersion} satisfies the requirement ^1.8.0 || ^2.0.0-beta.0`,
+          `Homebridge version ${this.api.serverVersion} satisfies the requirement ${packageConfig.engines.homebridge}`,
         );
       }
     } catch (error) {
