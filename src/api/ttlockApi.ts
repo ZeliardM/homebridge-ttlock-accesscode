@@ -373,8 +373,18 @@ export class TTLockApi {
           const payload = response.data as ApiErrorPayload;
           throw this.normalizeApiResponseError(payload, endpoint);
         }
+        // A body that is not JSON comes back as a string; reading fields from it would give undefined values
+        if (!this.isObject(response.data)) {
+          throw new TTLockApiError(
+            `Unreadable response from TTLock for ${endpoint}`,
+            TTLockApiErrorCategory.InvalidResponse,
+            false,
+            endpoint,
+            response.status,
+          );
+        }
 
-        return response.data;
+        return response.data as T;
       } catch (error) {
         const normalized = this.normalizeError(error, endpoint);
         lastError = normalized;
@@ -802,10 +812,23 @@ export class TTLockApi {
     sysInfo.fw_ver = detailResponse.firmwareRevision.split('.').slice(0, 3).join('.');
     sysInfo.hw_ver = detailResponse.hardwareRevision;
     sysInfo.model = detailResponse.modelNum;
-    if (stateResponse) {
-      sysInfo.state = stateResponse.state === 0 ? 1 : stateResponse.state === 1 ? 0 : stateResponse.state;
+    const state = this.toHomeKitLockState(stateResponse?.state);
+    if (state !== undefined) {
+      sysInfo.state = state;
     }
     return sysInfo;
+  }
+
+  // lock/queryOpenState state: 0 locked, 1 unlocked, 2 unknown. HomeKit LockCurrentState: 0 UNSECURED, 1 SECURED,
+  // 2 JAMMED, 3 UNKNOWN. Anything but 0 or 1 is UNKNOWN, never JAMMED; undefined when TTLock sent no state at all.
+  private toHomeKitLockState(state: unknown): number | undefined {
+    if (state === 0) {
+      return 1;
+    }
+    if (state === 1) {
+      return 0;
+    }
+    return typeof state === 'number' ? 3 : undefined;
   }
 
   // A busy gateway or a lock it briefly cannot reach must not drop the lock until the next discovery (12h by
@@ -836,6 +859,16 @@ export class TTLockApi {
       state: number;
       electricQuantity?: number;
     }>('lock/queryOpenState', 'GET', { lockId });
+    const state = this.toHomeKitLockState(stateResponse.state);
+    if (state === undefined) {
+      // Showing a state TTLock did not send would be a guess; keep the last known one
+      throw new TTLockApiError(
+        `lock/queryOpenState returned no lock state for lockId=${lockId}`,
+        TTLockApiErrorCategory.InvalidResponse,
+        false,
+        'lock/queryOpenState',
+      );
+    }
     // lock/queryOpenState also returns electricQuantity; only make the extra call if it is missing
     const batteryResponse = typeof stateResponse.electricQuantity === 'number'
       ? { electricQuantity: stateResponse.electricQuantity }
@@ -846,7 +879,7 @@ export class TTLockApi {
         'GET',
         { lockId },
       );
-    sysInfo.state = stateResponse.state === 0 ? 1 : stateResponse.state === 1 ? 0 : stateResponse.state;
+    sysInfo.state = state;
     sysInfo.battery = batteryResponse.electricQuantity;
     return sysInfo;
   }

@@ -623,6 +623,7 @@ export default abstract class HomeKitDevice {
     const C = this.platform.Characteristic;
     switch (type.UUID) {
       case C.LockCurrentState.UUID:
+        return C.LockCurrentState.UNKNOWN;
       case C.LockTargetState.UUID:
       case C.ConfigurationState.UUID:
         return 1;

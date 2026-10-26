@@ -17,8 +17,9 @@ export function buildLockDescriptors(
       writable: false,
       syncGroup: 'lockState',
       syncHomeKitValueAfterSet: true,
-      getInitial: context => context!.device.state ?? C.LockCurrentState.SECURED,
-      getCurrent: context => context!.device.state ?? C.LockCurrentState.SECURED,
+      // A lock whose state has not been read is not shown as locked
+      getInitial: context => context!.device.state ?? C.LockCurrentState.UNKNOWN,
+      getCurrent: context => context!.device.state ?? C.LockCurrentState.UNKNOWN,
     },
     {
       type: C.LockTargetState,
