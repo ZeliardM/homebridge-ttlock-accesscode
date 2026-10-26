@@ -6,6 +6,7 @@ on:
     types: [opened, reopened, synchronize, ready_for_review]
 
 permissions:
+  actions: read
   contents: write
   issues: write
   pull-requests: write
@@ -324,6 +325,8 @@ jobs:
 
       - name: Upsert Validation Sticky
         id: upsert-validation-sticky
+        # The comment is informational; failing to post it must not block the Dependabot merge.
+        continue-on-error: true
         uses: ./.github/actions/sticky-comment
         with:
           number: ${{ github.event.pull_request.number }}
