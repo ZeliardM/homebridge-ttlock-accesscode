@@ -11,7 +11,7 @@ import type {
 
 import HomeKitDevice from './devices/baseDevice.js';
 import create from './devices/create.js';
-import DeviceManager from './devices/deviceManager.js';
+import DeviceManager, { deviceEventEmitter } from './devices/deviceManager.js';
 import { parseConfig } from './config.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { TaskQueue } from './taskQueue.js';
@@ -25,7 +25,6 @@ import {
 } from './utils.js';
 import { TTLockApi, TTLockApiError, TTLockApiErrorCategory } from './api/ttlockApi.js';
 import { ApiCallPriority, UsageTracker } from './api/usageTracker.js';
-import { deviceEventEmitter } from './devices/deviceManager.js';
 import type { TTLockAccessCodeConfig } from './config.js';
 import type { TTLockDevice } from './devices/deviceTypes.js';
 import type { PackageConfig } from './utils.js';

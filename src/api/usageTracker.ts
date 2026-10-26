@@ -54,7 +54,7 @@ export class UsageTracker extends EventEmitter {
   // Background work stopping for the user reserve is logged once a month
   private backgroundPaused = false;
 
-  constructor(api: API, log: Logging, private totalAllowed: number) {
+  constructor(api: API, log: Logging, private readonly totalAllowed: number) {
     super();
     this.api = api;
     this.log = log;
@@ -196,25 +196,6 @@ export class UsageTracker extends EventEmitter {
     };
   }
 
-  public async increment(n = 1, reason?: string): Promise<void> {
-    if (!this.state) {
-      throw new Error('UsageTracker not initialized');
-    }
-    const release = await this.mutex.acquire();
-    try {
-      await this.rolloverIfNeededLocked();
-      this.state.used += n;
-      this.state.lastUpdatedISO = new Date().toISOString();
-      await this.persist();
-      if (reason) {
-        this.log.debug(`Usage incremented by ${n} (${reason}). New used=${this.state.used}`);
-      }
-      this.updateTier();
-    } finally {
-      release();
-    }
-  }
-
   public async tryReserve(n = 1, reason?: string, priority: ApiCallPriority = 'background'): Promise<boolean> {
     if (!this.state) {
       throw new Error('UsageTracker not initialized');
@@ -352,14 +333,6 @@ export class UsageTracker extends EventEmitter {
     return 0;
   }
 
-  public canReserve(n = 1): boolean {
-    if (!this.state) {
-      throw new Error('UsageTracker not initialized');
-    }
-    const remaining = this.state.totalAllowed - this.state.used;
-    return remaining >= n;
-  }
-
   // A backstop for a month without calls; the month also starts at its first call
   private scheduleRolloverCheck(): void {
     this.rolloverInterval = setInterval(() => void this.checkRollover(), 60 * 60 * 1000);
@@ -373,20 +346,6 @@ export class UsageTracker extends EventEmitter {
     const release = await this.mutex.acquire();
     try {
       await this.rolloverIfNeededLocked();
-    } finally {
-      release();
-    }
-  }
-
-  public async updateTotalAllowed(newTotal: number): Promise<void> {
-    if (!this.state) {
-      throw new Error('UsageTracker not initialized');
-    }
-    const release = await this.mutex.acquire();
-    try {
-      this.totalAllowed = newTotal;
-      this.state.totalAllowed = newTotal;
-      await this.persist();
     } finally {
       release();
     }

@@ -66,15 +66,14 @@ export default abstract class HomeKitDevice {
     readonly category: Categories,
     readonly categoryName: string,
   ) {
-    this.platform = platform;
-    this.deviceManager = this.platform.deviceManager;
-    this.log = prefixLogger(this.platform.log, `[${this.name}]`);
+    this.deviceManager = platform.deviceManager;
+    this.log = prefixLogger(platform.log, `[${this.name}]`);
     this.homebridgeAccessory = this.initializeAccessory();
     this.homebridgeAccessory.on(PlatformAccessoryEvent.IDENTIFY, () => this.identify());
 
     this.getSysInfoDeferred = deferAndCombine(
       this.fetchSysInfoInternal.bind(this),
-      this.platform.config.advancedOptions.waitTimeUpdate,
+      platform.config.advancedOptions.waitTimeUpdate,
     );
 
     try {
@@ -194,9 +193,6 @@ export default abstract class HomeKitDevice {
       return false;
     }
     const updatedSysInfo = await this.deviceManager.getSysInfo(deviceId);
-    if (!updatedSysInfo) {
-      throw new Error(`No sys_info returned for ${deviceId}`);
-    }
     Object.assign(this.ttlockDevice.sys_info, updatedSysInfo);
     this.log.debug(`Updated sys_info: ${updatedSysInfo.alias ?? deviceId}`);
     return true;

@@ -213,7 +213,7 @@ export default class DeviceManager {
     }
   }
 
-  async getSysInfo(deviceId: string): Promise<Partial<SysInfo> | undefined> {
+  async getSysInfo(deviceId: string): Promise<Partial<SysInfo>> {
     try {
       return await this.api.getSysInfo(deviceId);
     } catch (error) {

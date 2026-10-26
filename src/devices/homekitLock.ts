@@ -537,10 +537,6 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     return this.lockBusy ? 0 : 1;
   }
 
-  protected async updateAllServicesAndCharacteristics(forceUpdate: boolean): Promise<void> {
-    await super.updateAllServicesAndCharacteristics(forceUpdate);
-  }
-
   public identify(): void {
     this.log.info('identify');
   }

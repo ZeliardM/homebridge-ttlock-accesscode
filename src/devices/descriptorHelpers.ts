@@ -18,8 +18,8 @@ export function buildLockDescriptors(
       syncGroup: 'lockState',
       syncHomeKitValueAfterSet: true,
       // A lock whose state has not been read is not shown as locked
-      getInitial: context => context!.device.state ?? C.LockCurrentState.UNKNOWN,
-      getCurrent: context => context!.device.state ?? C.LockCurrentState.UNKNOWN,
+      getInitial: context => context.device.state ?? C.LockCurrentState.UNKNOWN,
+      getCurrent: context => context.device.state ?? C.LockCurrentState.UNKNOWN,
     },
     {
       type: C.LockTargetState,
@@ -27,8 +27,8 @@ export function buildLockDescriptors(
       writable: true,
       syncGroup: 'lockState',
       syncHomeKitValueAfterSet: true,
-      getInitial: context => targetFromState(context!.device.state),
-      getCurrent: context => targetFromState(context!.device.state),
+      getInitial: context => targetFromState(context.device.state),
+      getCurrent: context => targetFromState(context.device.state),
       checkSet: checkTarget,
       applySetInBackground: true,
       applySet: async (value, context) => {
@@ -48,20 +48,20 @@ export function buildBatteryDescriptors(C: typeof Characteristic): Characteristi
       type: C.BatteryLevel,
       name: 'BatteryLevel',
       writable: false,
-      getInitial: context => context!.device.battery ?? 100,
-      getCurrent: context => context!.device.battery ?? 100,
+      getInitial: context => context.device.battery ?? 100,
+      getCurrent: context => context.device.battery ?? 100,
     },
     {
       type: C.StatusLowBattery,
       name: 'StatusLowBattery',
       writable: false,
       getInitial: context => {
-        return (context!.device.battery < 20)
+        return (context.device.battery < 20)
           ? C.StatusLowBattery.BATTERY_LEVEL_LOW
           : C.StatusLowBattery.BATTERY_LEVEL_NORMAL;
       },
       getCurrent: context => {
-        return (context!.device.battery < 20)
+        return (context.device.battery < 20)
           ? C.StatusLowBattery.BATTERY_LEVEL_LOW
           : C.StatusLowBattery.BATTERY_LEVEL_NORMAL;
       },
