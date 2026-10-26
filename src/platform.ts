@@ -24,7 +24,7 @@ import {
   satisfiesVersion,
 } from './utils.js';
 import { TTLockApi, TTLockApiError, TTLockApiErrorCategory } from './api/ttlockApi.js';
-import { UsageTracker } from './api/usageTracker.js';
+import { ApiCallPriority, UsageTracker } from './api/usageTracker.js';
 import { deviceEventEmitter } from './devices/deviceManager.js';
 import type { TTLockAccessCodeConfig } from './config.js';
 import type { TTLockDevice } from './devices/deviceTypes.js';
@@ -422,6 +422,12 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     }, delayMs);
   }
 
+  // Discovery is background work, but until one has completed since startup HomeKit cannot lock, unlock or change
+  // access codes at all, so until then it may use the API calls kept in reserve for those
+  private discoveryPriority(): ApiCallPriority {
+    return this.discoveryCompleted ? 'background' : 'user';
+  }
+
   private discoveryRetryNeeded(): boolean {
     return !this.discoveryCompleted || this.getLocksNotFound().length > 0;
   }
@@ -439,7 +445,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
           // lock/list, then lock/detail, lock/queryOpenState and lock/listKeyboardPwd for every lock
           const callsForDiscovery = 1 + (3 * deviceCount);
           if (this.usageTracker) {
-            const reserved = await this.usageTracker.beginBatch(callsForDiscovery, 'initialDiscovery');
+            const reserved = await this.usageTracker.beginBatch(callsForDiscovery, 'initialDiscovery', this.discoveryPriority());
             if (!reserved) {
               this.log.info('Skipping initial device discovery due to API usage budget');
               return;
@@ -449,7 +455,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
           this.log.debug('Error reserving budget for initial discovery', error);
         }
         this.discoveryStartedAt = performance.now();
-        await this.deviceManager.discoverDevices();
+        await this.deviceManager.discoverDevices(undefined, this.discoveryPriority());
         await this.waitForDiscoveredDevices();
         this.discoveryCompleted = true;
       }
@@ -481,13 +487,14 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         const skipStateFor = new Set(Array.from(this.homekitDevicesById)
           .filter(([, device]) => !device.ttlockDevice.offline)
           .map(([deviceId]) => deviceId));
+        const priority = this.discoveryPriority();
         try {
           const deviceCount = this.getTTLockAccessoryCount();
           // lock/list, lock/detail and lock/listKeyboardPwd for every lock, and lock/queryOpenState for the locks whose
           // state discovery reads
           const callsForDiscovery = 1 + (2 * deviceCount) + Math.max(0, deviceCount - skipStateFor.size);
           if (this.usageTracker) {
-            const reserved = await this.usageTracker.beginBatch(callsForDiscovery, 'periodicDiscovery');
+            const reserved = await this.usageTracker.beginBatch(callsForDiscovery, 'periodicDiscovery', priority);
             if (!reserved) {
               this.log.info('Skipping periodic device discovery due to API usage budget');
               skippedForBudget = true;
@@ -498,7 +505,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
           this.log.debug('Error reserving budget for periodic discovery', error);
         }
         this.discoveryStartedAt = performance.now();
-        await this.deviceManager.discoverDevices(skipStateFor);
+        await this.deviceManager.discoverDevices(skipStateFor, priority);
         await this.waitForDiscoveredDevices();
         discoverySucceeded = true;
         this.discoveryCompleted = true;

@@ -5,7 +5,7 @@ import crypto from 'crypto';
 import { AxiosInstance } from 'axios';
 import { inspect } from 'node:util';
 
-import { UsageTracker } from './usageTracker.js';
+import { ApiCallPriority, UsageTracker } from './usageTracker.js';
 import { SimpleMutex } from '../utils.js';
 import { FeatureInfo, Passcode, SysInfo, TTLockDevice } from '../devices/deviceTypes.js';
 
@@ -135,6 +135,9 @@ export type RequestOptions = {
   callerLogsFailure?: boolean;
   // Runs before every attempt; throw to abort the request without sending it
   beforeAttempt?: (() => void) | undefined;
+  // 'user' for what HomeKit asks for (locking, unlocking, access codes), which may use the API calls kept in reserve
+  // at the end of the month; 'background' (the default) for polls and discovery, which may not
+  priority?: ApiCallPriority;
 };
 
 export type LockCommandOptions = {
@@ -197,25 +200,21 @@ export class TTLockApi {
     return crypto.createHash('md5').update(password).digest('hex');
   }
 
+  // The startup login, without which nothing HomeKit asks for can be done, so it may use the calls kept in reserve
   public async authenticate(username: string, password: string): Promise<void> {
     this.authUsername = username;
     this.authPassword = password;
-    await this.authenticateWithPassword(username, password);
+    await this.authenticateWithPassword(username, password, 'user');
   }
 
-  private async authenticateWithPassword(username: string, password: string): Promise<void> {
+  private async authenticateWithPassword(username: string, password: string, priority: ApiCallPriority): Promise<void> {
     this.log.debug('Authenticating with TTLock API...');
     try {
       const encryptedPassword = this.encryptPassword(password);
       if (this.usageTracker) {
-        const ok = await this.usageTracker.tryReserve(1, 'authenticate');
+        const ok = await this.usageTracker.tryReserve(1, 'authenticate', priority);
         if (!ok) {
-          throw new TTLockApiError(
-            'API usage budget exhausted (authenticate)',
-            TTLockApiErrorCategory.BudgetExhausted,
-            false,
-            'oauth2/token',
-          );
+          throw this.budgetExhaustedError('oauth2/token', 'authenticate', priority);
         }
       }
 
@@ -249,7 +248,7 @@ export class TTLockApi {
     }
   }
 
-  private async refreshTokenIfNeededLocked(): Promise<void> {
+  private async refreshTokenIfNeededLocked(priority: ApiCallPriority): Promise<void> {
     if (!this.refreshToken) {
       throw new TTLockApiError(
         'No refresh token available. Full re-authentication required.',
@@ -262,14 +261,9 @@ export class TTLockApi {
     try {
       this.log.debug('Refreshing access token...');
       if (this.usageTracker) {
-        const ok = await this.usageTracker.tryReserve(1, 'refreshToken');
+        const ok = await this.usageTracker.tryReserve(1, 'refreshToken', priority);
         if (!ok) {
-          throw new TTLockApiError(
-            'API usage budget exhausted (refreshToken)',
-            TTLockApiErrorCategory.BudgetExhausted,
-            false,
-            'oauth2/token',
-          );
+          throw this.budgetExhaustedError('oauth2/token', 'refreshToken', priority);
         }
       }
 
@@ -300,7 +294,8 @@ export class TTLockApi {
     }
   }
 
-  private async recoverAuthentication(failedToken: string | null, endpoint: string): Promise<void> {
+  // A login counts as the request that needs it: one for a poll does not use the calls kept in reserve
+  private async recoverAuthentication(failedToken: string | null, endpoint: string, priority: ApiCallPriority): Promise<void> {
     const release = await this.tokenMutex.acquire();
     try {
       if (this.accessToken && this.accessToken !== failedToken) {
@@ -310,7 +305,7 @@ export class TTLockApi {
 
       if (this.refreshToken) {
         try {
-          await this.refreshTokenIfNeededLocked();
+          await this.refreshTokenIfNeededLocked(priority);
           this.log.debug(`Recovered authentication via refresh token for endpoint ${endpoint}`);
           return;
         } catch (refreshError) {
@@ -333,7 +328,7 @@ export class TTLockApi {
         );
       }
 
-      await this.authenticateWithPassword(this.authUsername, this.authPassword);
+      await this.authenticateWithPassword(this.authUsername, this.authPassword, priority);
       this.log.info(`Recovered authentication via full credential re-login for endpoint ${endpoint}`);
     } finally {
       release();
@@ -348,13 +343,14 @@ export class TTLockApi {
   ): Promise<T> {
     const viaGateway = TTLockApi.viaGatewayEndpoints.includes(endpoint);
     const timeout = viaGateway ? this.gatewayRequestTimeoutMs : this.requestTimeoutMs;
+    const priority = options.priority ?? 'background';
     let authRecoveryAttempted = false;
     // The last failure that was not resolved by logging in again
     let lastError: TTLockApiError | undefined;
 
     // Under the token mutex, so requests that start together before the first login log in only once
     if (!this.accessToken) {
-      await this.recoverAuthentication(null, endpoint);
+      await this.recoverAuthentication(null, endpoint, priority);
     }
     if (!this.accessToken) {
       throw new TTLockApiError(
@@ -379,7 +375,7 @@ export class TTLockApi {
         options.beforeAttempt?.();
         // Every attempt is a real API call, so every attempt counts against the budget. The resend after a new
         // login is not a first attempt, even though it does not use up an attempt.
-        await this.reserveApiCall(endpoint, attempt === 0 && !authRecoveryAttempted);
+        await this.reserveApiCall(endpoint, attempt === 0 && !authRecoveryAttempted, priority);
         attemptedToken = this.accessToken;
         try {
           return await this.sendRequest<T>(endpoint, method, data, timeout);
@@ -397,7 +393,7 @@ export class TTLockApi {
       if (normalized.authRelated && !authRecoveryAttempted) {
         authRecoveryAttempted = true;
         this.log.warn(`Auth failure for ${endpoint}; attempting internal re-authentication`);
-        await this.recoverAuthentication(attemptedToken, endpoint);
+        await this.recoverAuthentication(attemptedToken, endpoint, priority);
         // The resend with the new token does not use up an attempt, so it happens even after the last one.
         // Like any attempt, it is only sent if its time has not run out (checked at the top of the loop).
         attempt--;
@@ -520,7 +516,7 @@ export class TTLockApi {
     return release;
   }
 
-  private async reserveApiCall(endpoint: string, firstAttempt: boolean): Promise<void> {
+  private async reserveApiCall(endpoint: string, firstAttempt: boolean, priority: ApiCallPriority): Promise<void> {
     if (!this.usageTracker) {
       return;
     }
@@ -529,14 +525,22 @@ export class TTLockApi {
       return;
     }
     const reason = firstAttempt ? `request:${endpoint}` : `retry:${endpoint}`;
-    if (!await this.usageTracker.tryReserve(1, reason)) {
-      throw new TTLockApiError(
-        `API usage budget exhausted (${endpoint})`,
-        TTLockApiErrorCategory.BudgetExhausted,
-        false,
-        endpoint,
-      );
+    if (!await this.usageTracker.tryReserve(1, reason, priority)) {
+      throw this.budgetExhaustedError(endpoint, endpoint, priority);
     }
+  }
+
+  // A call the monthly budget does not allow. Polls and discovery already stop at the calls kept in reserve for
+  // locking, unlocking and access codes.
+  private budgetExhaustedError(endpoint: string, what: string, priority: ApiCallPriority): TTLockApiError {
+    return new TTLockApiError(
+      priority === 'background'
+        ? `API usage budget: no calls left this month for polls and discovery (${what})`
+        : `API usage budget exhausted (${what})`,
+      TTLockApiErrorCategory.BudgetExhausted,
+      false,
+      endpoint,
+    );
   }
 
   // A request that failed for good. An offline gateway is left to the caller, which knows which lock it is.
@@ -872,14 +876,17 @@ export class TTLockApi {
 
   // skipStateFor: locks whose state is not read, because their own polls keep it current. Each read is an API call
   // and a gateway request.
-  public async getDevices(skipStateFor: ReadonlySet<string> = new Set()): Promise<TTLockDevice[]> {
+  public async getDevices(
+    skipStateFor: ReadonlySet<string> = new Set(),
+    priority: ApiCallPriority = 'background',
+  ): Promise<TTLockDevice[]> {
     const response = await this.makeAuthenticatedRequest<{
       list: { electricQuantity: number; featureValue: string; lockAlias: string; lockId: string; lockMac: string }[];
       pageNo: number;
       pageSize: number;
       pages: number;
       total: number;
-    }>('lock/list', 'GET', { pageNo: 1, pageSize: 1000 });
+    }>('lock/list', 'GET', { pageNo: 1, pageSize: 1000 }, { priority });
 
     if (!response.list || !Array.isArray(response.list)) {
       this.log.error('Invalid response format: expected list of locks');
@@ -897,7 +904,7 @@ export class TTLockApi {
       try {
         const ttlockDevice: TTLockDevice = {} as TTLockDevice;
         ttlockDevice.feature_info = featureInfo;
-        ttlockDevice.sys_info = await this.getDeviceDetails(lock.lockId, !skipStateFor.has(String(lock.lockId))) as SysInfo;
+        ttlockDevice.sys_info = await this.getDeviceDetails(lock.lockId, !skipStateFor.has(String(lock.lockId)), priority) as SysInfo;
         ttlockDevice.sys_info.alias = lock.lockAlias;
         const battery = this.toBatteryLevel(lock.electricQuantity);
         if (battery !== undefined) {
@@ -906,7 +913,7 @@ export class TTLockApi {
         ttlockDevice.sys_info.device_id = lock.lockId.toString();
         ttlockDevice.sys_info.mac = lock.lockMac;
         if (ttlockDevice.feature_info.passcode) {
-          const passcodes = await this.getPasscodesForDiscovery(lock.lockId);
+          const passcodes = await this.getPasscodesForDiscovery(lock.lockId, priority);
           if (passcodes) {
             ttlockDevice.sys_info.passcodes = passcodes;
           }
@@ -939,9 +946,9 @@ export class TTLockApi {
   }
 
   // A lock whose access codes could not be listed is kept without them; HomeKit lists them when it first asks
-  private async getPasscodesForDiscovery(lockId: string): Promise<Passcode[] | undefined> {
+  private async getPasscodesForDiscovery(lockId: string, priority: ApiCallPriority): Promise<Passcode[] | undefined> {
     try {
-      return await this.getPasscodes(lockId);
+      return await this.getPasscodes(lockId, { priority });
     } catch (error) {
       const normalized = this.normalizeError(error, 'lock/listKeyboardPwd');
       this.logApiError(`Failed to fetch access codes for lock ${lockId}`, normalized);
@@ -950,14 +957,14 @@ export class TTLockApi {
     }
   }
 
-  async getDeviceDetails(lockId: string, readState = true): Promise<Partial<SysInfo>> {
+  async getDeviceDetails(lockId: string, readState = true, priority: ApiCallPriority = 'background'): Promise<Partial<SysInfo>> {
     const sysInfo: Partial<SysInfo> = {};
     const detailResponse = await this.makeAuthenticatedRequest<{
       firmwareRevision: string;
       hardwareRevision: string;
       modelNum: string;
-    }>('lock/detail', 'GET', { lockId });
-    const stateResponse = readState ? await this.queryStateForDiscovery(lockId) : undefined;
+    }>('lock/detail', 'GET', { lockId }, { priority });
+    const stateResponse = readState ? await this.queryStateForDiscovery(lockId, priority) : undefined;
     if (!detailResponse.firmwareRevision || !detailResponse.hardwareRevision || !detailResponse.modelNum) {
       throw new TTLockApiError(
         `Invalid lock/detail response for lockId=${lockId}`,
@@ -991,9 +998,9 @@ export class TTLockApi {
   // A busy gateway or a lock it briefly cannot reach must not drop the lock until the next discovery (12h by
   // default). Return undefined instead, so the lock is kept and the next poll fills in its state. Not retried:
   // the lock's polls read the state again anyway, and retries would hold up the rest of discovery.
-  private async queryStateForDiscovery(lockId: string): Promise<{ state: number } | undefined> {
+  private async queryStateForDiscovery(lockId: string, priority: ApiCallPriority): Promise<{ state: number } | undefined> {
     try {
-      return await this.makeAuthenticatedRequest<{ state: number }>('lock/queryOpenState', 'GET', { lockId }, { retry: 'none' });
+      return await this.makeAuthenticatedRequest<{ state: number }>('lock/queryOpenState', 'GET', { lockId }, { retry: 'none', priority });
     } catch (error) {
       const temporary = error instanceof TTLockApiError && (
         error.gatewayTransient ||
@@ -1115,6 +1122,7 @@ export class TTLockApi {
       sendBy: options.finishBy - this.gatewayRequestTimeoutMs,
       finishBy: options.finishBy,
       beforeAttempt: options.beforeAttempt,
+      priority: 'user',
     };
   }
 
@@ -1184,7 +1192,7 @@ export class TTLockApi {
       keyboardPwd: passcode,
       keyboardPwdType: 2,
       addType: 2,
-    }, { retry: 'notSent', sendBy, finishBy: sendBy });
+    }, { retry: 'notSent', sendBy, finishBy: sendBy, priority: 'user' });
     this.log.debug(`Passcode added to lock: ${lockId}`);
     return response;
   }
@@ -1195,7 +1203,7 @@ export class TTLockApi {
       lockId,
       keyboardPwdId: passcodeId,
       deleteType: 2,
-    }, { retry: 'notSent', sendBy, finishBy: sendBy });
+    }, { retry: 'notSent', sendBy, finishBy: sendBy, priority: 'user' });
     this.log.debug(`Passcode deleted for lock: ${lockId}`);
   }
 }

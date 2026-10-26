@@ -15,6 +15,7 @@ import type {
 import type { ManualDoorHubConfig } from '../config.js';
 import { TTLockApiError } from '../api/ttlockApi.js';
 import type { TTLockApi } from '../api/ttlockApi.js';
+import type { ApiCallPriority } from '../api/usageTracker.js';
 
 // HomeKit gives up on a write after 9 s (HAP answers OPERATION_TIMED_OUT); keep ~40 ms of it for the reply.
 // Access-code writes are answered when they are done, so they get this long.
@@ -104,10 +105,10 @@ export default class DeviceManager {
     return `${blockingReasons.join('; ')}; TTLock command was not sent`;
   }
 
-  public async discoverDevices(skipStateFor?: ReadonlySet<string>): Promise<void> {
+  public async discoverDevices(skipStateFor?: ReadonlySet<string>, priority?: ApiCallPriority): Promise<void> {
     this.log.debug('Starting device discovery...');
     try {
-      const devices = await this.api.getDevices(skipStateFor);
+      const devices = await this.api.getDevices(skipStateFor, priority);
       for (const device of devices) {
         this.log.debug(`Discovered device: ${device.sys_info.alias} (${device.sys_info.device_id})`);
         deviceEventEmitter.emit('deviceDiscovered', device);
@@ -280,7 +281,7 @@ export default class DeviceManager {
         await this.api.deletePasscode(deviceId, passcode!, sendBy);
         break;
       case 'get':
-        return await this.api.getPasscodes(deviceId, { retry: 'notSent' });
+        return await this.api.getPasscodes(deviceId, { retry: 'notSent', priority: 'user' });
       default:
         throw new Error(`Unsupported passcode operation: ${operation}`);
     }

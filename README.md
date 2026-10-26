@@ -58,6 +58,7 @@ npm install -g homebridge-ttlock-accesscode
 - For non-Wi-Fi locks, make sure your gateway is online and near the lock.
 - The default settings are tuned for TTLock's monthly API limits.
 - Polling is automatically slowed when monthly allowance gets lower.
+- The last 1% of the monthly allowance (at least 50 calls) is kept for locking, unlocking and access codes. When only that is left, polling and discovery pause until the month ends.
 - Manual door DIRIGERA polling is local to the hub and does not count against TTLock API usage.
 - The Homebridge UI can test TTLock credentials, discover TTLock locks, pair DIRIGERA hubs, and list supported sensors.
 

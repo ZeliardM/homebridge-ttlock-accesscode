@@ -6,6 +6,14 @@ import { EventEmitter } from 'node:events';
 
 import { SimpleMutex } from '../utils.js';
 
+// Who an API call is for. 'user': locking, unlocking and access codes from HomeKit, and the logins they need.
+// 'background': polls and discovery, which leave the last calls of the month (the user reserve) to 'user' calls.
+export type ApiCallPriority = 'user' | 'background';
+
+// The user reserve: the larger of these
+const USER_RESERVE_MIN_CALLS = 50;
+const USER_RESERVE_FRACTION = 0.01;
+
 type StoredUsage = {
   year: number;
   month: number;
@@ -43,6 +51,8 @@ export class UsageTracker extends EventEmitter {
   private pendingReserved = 0;
   // Every call saves the usage, so a failing save is logged once until it works again
   private persistFailing = false;
+  // Background work stopping for the user reserve is logged once a month
+  private backgroundPaused = false;
 
   constructor(api: API, log: Logging, private totalAllowed: number) {
     super();
@@ -171,7 +181,9 @@ export class UsageTracker extends EventEmitter {
     const daysInMonth = daysInMonthOf(now);
     const currentDay = now.getDate();
     const daysRemaining = Math.max(1, daysInMonth - (currentDay - 1));
-    const remainingDailyAllowance = daysRemaining > 0 ? Math.floor(remaining / daysRemaining) : 0;
+    const userReserve = this.userReserve;
+    // What polls and discovery may use per day: they stop at the user reserve
+    const remainingDailyAllowance = daysRemaining > 0 ? Math.floor(Math.max(0, remaining - userReserve) / daysRemaining) : 0;
     return {
       used,
       totalAllowed,
@@ -179,6 +191,7 @@ export class UsageTracker extends EventEmitter {
       remaining,
       daysRemaining,
       remainingDailyAllowance,
+      userReserve,
       lastUpdatedISO: this.state.lastUpdatedISO,
     };
   }
@@ -202,15 +215,14 @@ export class UsageTracker extends EventEmitter {
     }
   }
 
-  public async tryReserve(n = 1, reason?: string): Promise<boolean> {
+  public async tryReserve(n = 1, reason?: string, priority: ApiCallPriority = 'background'): Promise<boolean> {
     if (!this.state) {
       throw new Error('UsageTracker not initialized');
     }
     const release = await this.mutex.acquire();
     try {
       await this.rolloverIfNeededLocked();
-      const remaining = this.state.totalAllowed - this.state.used;
-      if (remaining >= n) {
+      if (this.fitsLocked(n, priority)) {
         this.state.used += n;
         this.state.lastUpdatedISO = new Date().toISOString();
         await this.persist();
@@ -227,15 +239,14 @@ export class UsageTracker extends EventEmitter {
     }
   }
 
-  public async beginBatch(n = 1, reason?: string): Promise<boolean> {
+  public async beginBatch(n = 1, reason?: string, priority: ApiCallPriority = 'background'): Promise<boolean> {
     if (!this.state) {
       throw new Error('UsageTracker not initialized');
     }
     const release = await this.mutex.acquire();
     try {
       await this.rolloverIfNeededLocked();
-      const remaining = this.state.totalAllowed - this.state.used;
-      if (remaining >= n) {
+      if (this.fitsLocked(n, priority)) {
         this.state.used += n;
         this.pendingReserved += n;
         this.state.lastUpdatedISO = new Date().toISOString();
@@ -267,6 +278,33 @@ export class UsageTracker extends EventEmitter {
     }
   }
 
+  // Polls and discovery stop short of the user reserve, so HomeKit can still lock, unlock and change access codes once
+  // they have used up the rest of the month's calls
+  private fitsLocked(n: number, priority: ApiCallPriority): boolean {
+    if (!this.state) {
+      return false;
+    }
+    const remaining = this.state.totalAllowed - this.state.used;
+    if (priority === 'user') {
+      return remaining >= n;
+    }
+    if (remaining - n >= this.userReserve) {
+      return true;
+    }
+    if (!this.backgroundPaused) {
+      this.backgroundPaused = true;
+      this.log.warn(
+        `Only ${Math.max(0, remaining)} of ${this.state.totalAllowed} API calls are left this month. Polling and discovery ` +
+        'pause until the month ends, so that the rest stay available for locking, unlocking and access codes.',
+      );
+    }
+    return false;
+  }
+
+  private get userReserve(): number {
+    return Math.max(USER_RESERVE_MIN_CALLS, Math.ceil(this.totalAllowed * USER_RESERVE_FRACTION));
+  }
+
   // The month's budget starts at its first call, not at the next hourly check: until then, calls would count against
   // (and be refused by) last month's budget. Discovery reservations left from last month go with it.
   private async rolloverIfNeededLocked(now = new Date()): Promise<void> {
@@ -275,6 +313,7 @@ export class UsageTracker extends EventEmitter {
     }
     this.state = this.newMonthState(now, 0);
     this.pendingReserved = 0;
+    this.backgroundPaused = false;
     await this.persist();
     this.currentTier = this.computeTier();
     this.log.info(`New month: API usage starts again at 0 of ${this.state.totalAllowed} calls`);
