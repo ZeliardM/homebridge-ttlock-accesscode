@@ -436,7 +436,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       if (this.deviceManager) {
         try {
           const deviceCount = this.getTTLockAccessoryCount();
-          const callsForDiscovery = 1 + (2 * deviceCount);
+          // lock/list, then lock/detail, lock/queryOpenState and lock/listKeyboardPwd for every lock
+          const callsForDiscovery = 1 + (3 * deviceCount);
           if (this.usageTracker) {
             const reserved = await this.usageTracker.beginBatch(callsForDiscovery, 'initialDiscovery');
             if (!reserved) {
@@ -732,8 +733,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const remainingDailyAllowance = (usage.remainingDailyAllowance !== undefined)
       ? usage.remainingDailyAllowance
       : Math.floor((usage.totalAllowed - usage.used) / Math.max(1, daysRemaining));
-    const pollingBudgetPerDay = Math.floor(remainingDailyAllowance * 0.8);
-    const estimatedCallsPerPoll = Math.max(1, deviceCount * 2);
+    // Periodic discovery calls lock/list, and lock/detail and lock/listKeyboardPwd for every lock
+    const discoveryCallsPerDay = (1 + 2 * deviceCount) * 86400000 / this.config.discoveryOptions.discoveryPollingInterval;
+    const pollingBudgetPerDay = Math.max(0, Math.floor(remainingDailyAllowance * 0.8 - discoveryCallsPerDay));
+    // A poll is lock/queryOpenState, which also returns the battery level; a lock that leaves it out takes a second call
+    const estimatedCallsPerPoll = Math.max(1, deviceCount + (this.ttLockApi?.locksPolledWithTwoCalls ?? 0));
     const maxPollsPerDay = Math.max(1, Math.floor(pollingBudgetPerDay / estimatedCallsPerPoll));
     const basePollingIntervalSec = Math.max(1, Math.floor(86400 / maxPollsPerDay));
 

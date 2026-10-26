@@ -170,6 +170,8 @@ export class TTLockApi {
   private readonly gatewayQueue = new SimpleMutex();
   private readonly gatewayGapMs = 1000;
   private lastGatewayRequestEndAt = Number.NEGATIVE_INFINITY;
+  // Locks whose last poll found no battery level in lock/queryOpenState, so it took a second call to read it
+  private readonly locksPolledWithBatteryCall = new Set<string>();
   // Gateway requests that are safe to send again after the gateway could not reach the lock (errcode 1): reads and
   // lock/unlock. Not passcode add/delete, which TTLock may have applied.
   private static readonly resendSafeGatewayEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
@@ -1032,7 +1034,10 @@ export class TTLockApi {
     sysInfo.state = state;
     // lock/queryOpenState also returns electricQuantity; only make the extra call if it is missing
     let electricQuantity: unknown = stateResponse.electricQuantity;
-    if (typeof electricQuantity !== 'number') {
+    if (typeof electricQuantity === 'number') {
+      this.locksPolledWithBatteryCall.delete(lockId);
+    } else {
+      this.locksPolledWithBatteryCall.add(lockId);
       try {
         const batteryResponse = await this.makeAuthenticatedRequest<{
           electricQuantity?: number;
@@ -1054,6 +1059,11 @@ export class TTLockApi {
       sysInfo.battery = battery;
     }
     return sysInfo;
+  }
+
+  // A poll is one API call, two for these locks; polling is paced from it
+  public get locksPolledWithTwoCalls(): number {
+    return this.locksPolledWithBatteryCall.size;
   }
 
   // electricQuantity is a percentage; anything else is not a battery level
