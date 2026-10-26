@@ -775,7 +775,10 @@ export class TTLockApi {
         ttlockDevice.feature_info = await this.getFeatureInfo(lock.featureValue);
         ttlockDevice.sys_info = await this.getDeviceDetails(lock.lockId) as SysInfo;
         ttlockDevice.sys_info.alias = lock.lockAlias;
-        ttlockDevice.sys_info.battery = lock.electricQuantity;
+        const battery = this.toBatteryLevel(lock.electricQuantity);
+        if (battery !== undefined) {
+          ttlockDevice.sys_info.battery = battery;
+        }
         ttlockDevice.sys_info.device_id = lock.lockId.toString();
         ttlockDevice.sys_info.mac = lock.lockMac;
         if (ttlockDevice.feature_info.passcode) {
@@ -869,19 +872,38 @@ export class TTLockApi {
         'lock/queryOpenState',
       );
     }
-    // lock/queryOpenState also returns electricQuantity; only make the extra call if it is missing
-    const batteryResponse = typeof stateResponse.electricQuantity === 'number'
-      ? { electricQuantity: stateResponse.electricQuantity }
-      : await this.makeAuthenticatedRequest<{
-        electricQuantity: number;
-      }>(
-        'lock/queryElectricQuantity',
-        'GET',
-        { lockId },
-      );
     sysInfo.state = state;
-    sysInfo.battery = batteryResponse.electricQuantity;
+    // lock/queryOpenState also returns electricQuantity; only make the extra call if it is missing
+    let electricQuantity: unknown = stateResponse.electricQuantity;
+    if (typeof electricQuantity !== 'number') {
+      try {
+        const batteryResponse = await this.makeAuthenticatedRequest<{
+          electricQuantity?: number;
+        }>(
+          'lock/queryElectricQuantity',
+          'GET',
+          { lockId },
+        );
+        electricQuantity = batteryResponse.electricQuantity;
+      } catch (error) {
+        // The state was read; return it and keep the last known battery level
+        this.log.debug(`Could not read the battery level of lock ${lockId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    // Left out when unknown: the poll merges this into the lock, so the last known level stays
+    const battery = this.toBatteryLevel(electricQuantity);
+    if (battery !== undefined) {
+      sysInfo.battery = battery;
+    }
     return sysInfo;
+  }
+
+  // electricQuantity is a percentage; anything else is not a battery level
+  private toBatteryLevel(electricQuantity: unknown): number | undefined {
+    if (typeof electricQuantity !== 'number' || !Number.isFinite(electricQuantity) || electricQuantity < 0) {
+      return undefined;
+    }
+    return Math.min(100, Math.round(electricQuantity));
   }
 
   async getFeatureInfo(featureValue: string): Promise<FeatureInfo> {
