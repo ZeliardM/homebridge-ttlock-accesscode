@@ -41,12 +41,14 @@ function toRequestError(error) {
   return error instanceof RequestError ? error : requestError(error instanceof Error ? error.message : String(error), 500);
 }
 
-function getRequiredString(payload, field, label) {
-  const value = String(payload?.[field] ?? '').trim();
-  if (!value) {
+// trim: false for the client secret and password, which are used exactly as typed (spaces at either end can be
+// part of them); a value of only spaces still counts as missing
+function getRequiredString(payload, field, label, { trim = true } = {}) {
+  const value = String(payload?.[field] ?? '');
+  if (!value.trim()) {
     throw requestError(`${label} is required.`);
   }
-  return value;
+  return trim ? value.trim() : value;
 }
 
 async function importBuiltModule(modulePath) {
@@ -60,9 +62,9 @@ async function importBuiltModule(modulePath) {
 
 async function createTTLockApi(payload) {
   const clientId = getRequiredString(payload, 'clientId', 'TTLock Client ID');
-  const clientSecret = getRequiredString(payload, 'clientSecret', 'TTLock Client Secret');
+  const clientSecret = getRequiredString(payload, 'clientSecret', 'TTLock Client Secret', { trim: false });
   const username = getRequiredString(payload, 'username', 'TTLock username');
-  const password = getRequiredString(payload, 'password', 'TTLock password');
+  const password = getRequiredString(payload, 'password', 'TTLock password', { trim: false });
   const { TTLockApi } = await importBuiltModule(['api', 'ttlockApi.js']);
   const api = new TTLockApi(new StreamLogger(), clientId, clientSecret);
   await api.authenticate(username, password);

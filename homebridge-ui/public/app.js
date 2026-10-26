@@ -87,12 +87,13 @@
     return ACCOUNT_FIELDS.every((field) => platformValue(field).trim().length > 0);
   }
 
+  // The client secret and password are used exactly as typed: spaces at either end can be part of them
   function accountPayload() {
     return {
       clientId: platformValue('clientId').trim(),
-      clientSecret: platformValue('clientSecret').trim(),
+      clientSecret: platformValue('clientSecret'),
       username: platformValue('username').trim(),
-      password: platformValue('password').trim(),
+      password: platformValue('password'),
     };
   }
 
@@ -686,9 +687,10 @@
       platform: PLATFORM_NAME,
       name: String(block.name || DEFAULTS.name).trim() || DEFAULTS.name,
       clientId: String(block.clientId || '').trim(),
-      clientSecret: String(block.clientSecret || '').trim(),
+      // As typed, like accountPayload sends them to TTLock
+      clientSecret: String(block.clientSecret || ''),
       username: String(block.username || '').trim(),
-      password: String(block.password || '').trim(),
+      password: String(block.password || ''),
       totalApiCallsPerMonth: parseNumber(block.totalApiCallsPerMonth, DEFAULTS.totalApiCallsPerMonth, 30000),
       pollingInterval: parseNumber(block.pollingInterval, DEFAULTS.pollingInterval, 30, 2147483),
       discoveryPollingInterval: parseNumber(block.discoveryPollingInterval, DEFAULTS.discoveryPollingInterval, 1, 596),
