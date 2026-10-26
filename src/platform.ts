@@ -79,6 +79,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private deviceDiscoveredHandler: ((device: TTLockDevice) => Promise<void>) | undefined;
   // performance.now() when the running or last discovery started
   private discoveryStartedAt = 0;
+  // Discovered locks still being added or updated (see processDiscoveredDevice)
+  private readonly devicesBeingProcessed = new Set<Promise<void>>();
   private discoveryInterval: NodeJS.Timeout | undefined;
   private configInvalid = false;
   private platformInitialization: Promise<void>;
@@ -172,15 +174,28 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.log.debug(`Device discovered during periodic discovery: ${device.sys_info.device_id}`);
         discoveredDeviceIds.add(device.sys_info.device_id);
         this.log.debug(`Added device ID to discoveredDeviceIds: ${device.sys_info.device_id}`);
-        await this.processDevice(device);
+        await this.processDiscoveredDevice(device);
       };
     } else {
       this.deviceDiscoveredHandler = async (device: TTLockDevice) => {
         this.log.debug(`Device discovered during initial discovery: ${device.sys_info.device_id}`);
-        await this.processDevice(device);
+        await this.processDiscoveredDevice(device);
       };
     }
     deviceEventEmitter.on('deviceDiscovered', this.deviceDiscoveredHandler);
+  }
+
+  // The deviceDiscovered emit does not wait for its handlers, so discovery ends while the locks it found are still
+  // being added. Keep track of them, so discovery can wait until they are all in place.
+  private processDiscoveredDevice(device: TTLockDevice): Promise<void> {
+    const processing = this.processDevice(device);
+    this.devicesBeingProcessed.add(processing);
+    return processing.finally(() => this.devicesBeingProcessed.delete(processing));
+  }
+
+  private async waitForDiscoveredDevices(): Promise<void> {
+    // processDevice handles its own errors, so these never reject
+    await Promise.all(this.devicesBeingProcessed);
   }
 
   async initializePlatform(): Promise<void> {
@@ -251,11 +266,13 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       this.log.debug('DeviceManager initialized');
       this.deviceManager.initializeExternalDoors();
 
+      const locksBefore = this.getTTLockDeviceIds().join(',');
       await this.discoverDevices();
       this.log.debug('Device discovery completed');
       if (this.isShuttingDown) {
         return;
       }
+      await this.reschedulePollingIfLocksChanged(locksBefore);
 
       const discoveredDeviceIds = new Set<string>();
       this.setupPeriodicDiscovery(discoveredDeviceIds);
@@ -355,6 +372,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         }
         this.discoveryStartedAt = performance.now();
         await this.deviceManager.discoverDevices();
+        await this.waitForDiscoveredDevices();
       }
     } catch (error) {
       this.log.error('Error during discoverDevices:', error);
@@ -373,6 +391,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     }
     this.periodicDeviceDiscovering = true;
     let discoverySucceeded = false;
+    const locksBefore = this.getTTLockDeviceIds().join(',');
     discoveredDeviceIds.clear();
     this.log.debug('Cleared discoveredDeviceIds set before discovery.');
     try {
@@ -399,6 +418,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         }
         this.discoveryStartedAt = performance.now();
         await this.deviceManager.discoverDevices(skipStateFor);
+        await this.waitForDiscoveredDevices();
         discoverySucceeded = true;
       }
     } catch (error) {
@@ -412,6 +432,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       this.periodicDeviceDiscovering = false;
       this.log.debug('Finished periodic device discovery');
     }
+    await this.reschedulePollingIfLocksChanged(locksBefore);
   }
 
   private async processDevice(device: TTLockDevice): Promise<void> {
@@ -628,16 +649,28 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
   // Position of a lock among all locks, used to spread their polls across the polling interval
   public getPollingSlot(deviceId: string): { index: number; count: number } {
-    const deviceIds = Array.from(this.configuredAccessories.values())
+    const deviceIds = this.getTTLockDeviceIds();
+    return { index: Math.max(0, deviceIds.indexOf(deviceId)), count: Math.max(1, deviceIds.length) };
+  }
+
+  private getTTLockDeviceIds(): string[] {
+    return Array.from(this.configuredAccessories.values())
       .flatMap(accessory => (accessory.context.kind !== 'manualDoor' && accessory.context.deviceId) ? [accessory.context.deviceId] : [])
       .sort();
-    return { index: Math.max(0, deviceIds.indexOf(deviceId)), count: Math.max(1, deviceIds.length) };
   }
 
   public getTTLockAccessoryCount(): number {
     return Array.from(this.configuredAccessories.values())
       .filter(accessory => accessory.context.kind !== 'manualDoor')
       .length;
+  }
+
+  // Each lock's poll slot and the polling interval depend on all the locks, but a lock that discovery adds starts
+  // polling before the locks after it are added. Once a discovery has added or removed locks, schedule them all again.
+  private async reschedulePollingIfLocksChanged(locksBefore: string): Promise<void> {
+    if (this.getTTLockDeviceIds().join(',') !== locksBefore) {
+      await this.reschedulePolling();
+    }
   }
 
   private async reschedulePolling(): Promise<void> {
