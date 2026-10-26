@@ -17,6 +17,8 @@
 /CHANGELOG.md                        @ZeliardM
 /README.md                           @ZeliardM
 /CONTRIBUTING.md                     @ZeliardM
+/AGENTS.md                           @ZeliardM
+/CLAUDE.md                           @ZeliardM
 
 # GitHub configuration and automation
 /.github/actions/                    @ZeliardM
@@ -24,7 +26,6 @@
 /.github/scripts/                    @ZeliardM
 /.github/workflows/                  @ZeliardM
 /.github/CODEOWNERS                  @ZeliardM
-/.github/copilot-instructions.md     @ZeliardM
 /.github/dependabot.yml              @ZeliardM
 /.github/labeler.yml                 @ZeliardM
 /.github/labels-reference.md         @ZeliardM
