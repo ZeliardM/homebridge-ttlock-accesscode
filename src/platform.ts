@@ -387,7 +387,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     if (this.discoveryCompleted) {
       if (this.missingLockRetries >= DISCOVERY_RETRY_DELAYS_MS.length) {
         this.log.info(
-          `Discovery has not found ${notFound.length} lock(s) known from the last run (${notFound.join(', ')}); ` +
+          `Discovery has not found or could not read ${notFound.length} lock(s) known from the last run (${notFound.join(', ')}); ` +
           'the regular discovery keeps looking for them',
         );
         return;
@@ -403,7 +403,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const delay = delayMs >= 60 * 1000 ? `${Math.round(delayMs / 60000)} min` : `${Math.round(delayMs / 1000)}s`;
     this.log.info(
       (this.discoveryCompleted
-        ? `Discovery did not find ${notFound.length} lock(s) known from the last run (${notFound.join(', ')})`
+        ? `Discovery did not find or could not read ${notFound.length} lock(s) known from the last run (${notFound.join(', ')})`
         : 'Device discovery did not complete') +
       `; trying again in ${delay}`,
     );
@@ -519,13 +519,31 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       device.last_seen = now;
       device.offline = false;
       const accessory = this.findPlatformAccessory(device.sys_info.device_id);
-      if (accessory) {
+      if (device.discovery_incomplete) {
+        this.keepIncompleteDevice(device, accessory, now);
+      } else if (accessory) {
         await this.updateExistingDevice(accessory, device, now);
       } else {
         await this.addNewDevice(device);
       }
     } catch (error) {
       this.log.error(`Error processing device [${device.sys_info.device_id}]:`, error);
+    }
+  }
+
+  // TTLock lists the lock, but its details could not be read. A lock already in HomeKit stays as it is and counts as
+  // seen, so it is not aged out; a new one is added by a discovery that reads its details.
+  private keepIncompleteDevice(
+    device: TTLockDevice,
+    accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext> | undefined,
+    now: Date,
+  ): void {
+    const { alias, device_id: deviceId } = device.sys_info;
+    if (accessory) {
+      this.log.info(`Keeping [${alias}] [${deviceId}] as it is: TTLock lists it, but its details could not be read`);
+      this.updateAccessoryStatus(accessory, now, false);
+    } else {
+      this.log.info(`Not adding [${alias}] [${deviceId}] yet: its details could not be read. The next discovery tries again.`);
     }
   }
 

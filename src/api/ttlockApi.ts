@@ -891,9 +891,10 @@ export class TTLockApi {
 
     const lockList: TTLockDevice[] = [];
     for (const lock of response.list) {
+      const featureInfo = await this.getFeatureInfo(lock.featureValue);
       try {
         const ttlockDevice: TTLockDevice = {} as TTLockDevice;
-        ttlockDevice.feature_info = await this.getFeatureInfo(lock.featureValue);
+        ttlockDevice.feature_info = featureInfo;
         ttlockDevice.sys_info = await this.getDeviceDetails(lock.lockId, !skipStateFor.has(String(lock.lockId))) as SysInfo;
         ttlockDevice.sys_info.alias = lock.lockAlias;
         const battery = this.toBatteryLevel(lock.electricQuantity);
@@ -903,7 +904,10 @@ export class TTLockApi {
         ttlockDevice.sys_info.device_id = lock.lockId.toString();
         ttlockDevice.sys_info.mac = lock.lockMac;
         if (ttlockDevice.feature_info.passcode) {
-          ttlockDevice.sys_info.passcodes = await this.getPasscodes(lock.lockId);
+          const passcodes = await this.getPasscodesForDiscovery(lock.lockId);
+          if (passcodes) {
+            ttlockDevice.sys_info.passcodes = passcodes;
+          }
         }
         ttlockDevice.offline = false;
         ttlockDevice.last_seen = new Date();
@@ -911,10 +915,37 @@ export class TTLockApi {
       } catch (error) {
         const normalized = this.normalizeError(error, 'lock/detail|lock/queryOpenState');
         this.logApiError(`Failed to fetch details for lock ${lock.lockId}`, normalized);
-        continue;
+        // Still reported: TTLock lists the lock, so it must not look gone and be aged out of HomeKit
+        lockList.push(this.incompleteDevice(lock, featureInfo));
       }
     }
     return lockList;
+  }
+
+  // What lock/list says about a lock whose details could not be read: enough to keep it, not to add it
+  private incompleteDevice(
+    lock: { lockAlias: string; lockId: string; lockMac: string },
+    featureInfo: FeatureInfo,
+  ): TTLockDevice {
+    return {
+      discovery_incomplete: true,
+      feature_info: featureInfo,
+      last_seen: new Date(),
+      offline: false,
+      sys_info: { alias: lock.lockAlias, device_id: lock.lockId.toString(), mac: lock.lockMac } as SysInfo,
+    };
+  }
+
+  // A lock whose access codes could not be listed is kept without them; HomeKit lists them when it first asks
+  private async getPasscodesForDiscovery(lockId: string): Promise<Passcode[] | undefined> {
+    try {
+      return await this.getPasscodes(lockId);
+    } catch (error) {
+      const normalized = this.normalizeError(error, 'lock/listKeyboardPwd');
+      this.logApiError(`Failed to fetch access codes for lock ${lockId}`, normalized);
+      this.log.debug(`Keeping lock ${lockId} without its access codes; they are listed when HomeKit asks for them`);
+      return undefined;
+    }
   }
 
   async getDeviceDetails(lockId: string, readState = true): Promise<Partial<SysInfo>> {

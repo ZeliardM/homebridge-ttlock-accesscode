@@ -18,6 +18,8 @@ export interface SysInfo {
 }
 
 export interface Lock {
+  // Discovery: TTLock lists the lock, but its details could not be read (sys_info holds only what lock/list returns)
+  discovery_incomplete?: boolean;
   feature_info: FeatureInfo;
   last_seen: Date;
   offline: boolean;
