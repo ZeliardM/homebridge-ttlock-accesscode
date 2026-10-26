@@ -62,6 +62,10 @@ const TTLOCK_CREDENTIALS = {
 // and every login TTLock rejects costs an API call and counts as a failed login on the account
 const STARTUP_RETRY_SLOW_MS = 60 * 60 * 1000;
 const STARTUP_RETRY_MAX_MS = 5 * 60 * 1000;
+// Waits before discovery runs again while no discovery has completed since startup, or while locks known from the
+// last run have not been found, instead of the discovery interval (12 h by default). The last wait repeats while no
+// discovery has completed; locks that are not found are looked for only this many times.
+const DISCOVERY_RETRY_DELAYS_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000];
 
 export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic;
@@ -82,6 +86,14 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   // Discovered locks still being added or updated (see processDiscoveredDevice)
   private readonly devicesBeingProcessed = new Set<Promise<void>>();
   private discoveryInterval: NodeJS.Timeout | undefined;
+  // Whether a discovery has completed since Homebridge started
+  private discoveryCompleted = false;
+  // Runs discovery again soon after startup (see scheduleDiscoveryRetry)
+  private discoveryRetryTask: (() => Promise<void>) | undefined;
+  private discoveryRetryTimer: NodeJS.Timeout | undefined;
+  private discoveryRetryAttempt = 0;
+  // Retries made only to look for locks that a completed discovery did not find
+  private missingLockRetries = 0;
   private configInvalid = false;
   private platformInitialization: Promise<void>;
   // The wait between TTLock API startup attempts; shutdown wakes it
@@ -142,6 +154,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.isShuttingDown = true;
       }
       this.startupRetry?.wake();
+      if (this.discoveryRetryTimer) {
+        clearTimeout(this.discoveryRetryTimer);
+        this.discoveryRetryTimer = undefined;
+      }
       if (this.discoveryInterval) {
         clearInterval(this.discoveryInterval);
         this.log.debug('Cleared periodic device discovery interval');
@@ -276,6 +292,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
       const discoveredDeviceIds = new Set<string>();
       this.setupPeriodicDiscovery(discoveredDeviceIds);
+      this.scheduleDiscoveryRetry();
     } catch (error) {
       this.log.error('An error occurred during startup:', error);
     }
@@ -342,6 +359,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     };
 
     const deferredDiscoveryTask = deferAndCombine(discoveryTask, this.config.advancedOptions.waitTimeUpdate);
+    this.discoveryRetryTask = async () => {
+      await discoveryTask();
+      this.scheduleDiscoveryRetry();
+    };
 
     this.discoveryInterval = setInterval(() => {
       try {
@@ -352,6 +373,57 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     }, this.config.discoveryOptions.discoveryPollingInterval);
 
     this.log.debug('Periodic device discovery setup completed');
+  }
+
+  // A cached lock that discovery has not found has no handlers (HomeKit gets No Response for its writes) and is not
+  // polled. Until a discovery has completed and found every lock known from the last run, run it again soon rather
+  // than after the discovery interval. A lock deleted from the TTLock account is never found, so missing locks are
+  // looked for only a few times; the regular discovery looks for them after that.
+  private scheduleDiscoveryRetry(): void {
+    if (this.isShuttingDown || this.discoveryRetryTimer || !this.discoveryRetryTask || !this.discoveryRetryNeeded()) {
+      return;
+    }
+    const notFound = this.getLocksNotFound();
+    if (this.discoveryCompleted) {
+      if (this.missingLockRetries >= DISCOVERY_RETRY_DELAYS_MS.length) {
+        this.log.info(
+          `Discovery has not found ${notFound.length} lock(s) known from the last run (${notFound.join(', ')}); ` +
+          'the regular discovery keeps looking for them',
+        );
+        return;
+      }
+      this.missingLockRetries++;
+    }
+    const lastDelayMs = DISCOVERY_RETRY_DELAYS_MS[DISCOVERY_RETRY_DELAYS_MS.length - 1] ?? 0;
+    const delayMs = Math.min(
+      DISCOVERY_RETRY_DELAYS_MS[this.discoveryRetryAttempt] ?? lastDelayMs,
+      this.config.discoveryOptions.discoveryPollingInterval,
+    );
+    this.discoveryRetryAttempt++;
+    const delay = delayMs >= 60 * 1000 ? `${Math.round(delayMs / 60000)} min` : `${Math.round(delayMs / 1000)}s`;
+    this.log.info(
+      (this.discoveryCompleted
+        ? `Discovery did not find ${notFound.length} lock(s) known from the last run (${notFound.join(', ')})`
+        : 'Device discovery did not complete') +
+      `; trying again in ${delay}`,
+    );
+    const retryTask = this.discoveryRetryTask;
+    this.discoveryRetryTimer = setTimeout(() => {
+      this.discoveryRetryTimer = undefined;
+      // The regular discovery may have done it meanwhile
+      if (this.discoveryRetryNeeded()) {
+        this.taskQueue.addTask(retryTask);
+      }
+    }, delayMs);
+  }
+
+  private discoveryRetryNeeded(): boolean {
+    return !this.discoveryCompleted || this.getLocksNotFound().length > 0;
+  }
+
+  // Cached locks without handlers: discovery has not found them since Homebridge started
+  private getLocksNotFound(): string[] {
+    return this.getTTLockDeviceIds().filter(deviceId => !this.homekitDevicesById.has(deviceId));
   }
 
   private async discoverDevices() {
@@ -373,6 +445,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.discoveryStartedAt = performance.now();
         await this.deviceManager.discoverDevices();
         await this.waitForDiscoveredDevices();
+        this.discoveryCompleted = true;
       }
     } catch (error) {
       this.log.error('Error during discoverDevices:', error);
@@ -391,6 +464,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     }
     this.periodicDeviceDiscovering = true;
     let discoverySucceeded = false;
+    let skippedForBudget = false;
     const locksBefore = this.getTTLockDeviceIds().join(',');
     discoveredDeviceIds.clear();
     this.log.debug('Cleared discoveredDeviceIds set before discovery.');
@@ -410,6 +484,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
             const reserved = await this.usageTracker.beginBatch(callsForDiscovery, 'periodicDiscovery');
             if (!reserved) {
               this.log.info('Skipping periodic device discovery due to API usage budget');
+              skippedForBudget = true;
               return;
             }
           }
@@ -420,13 +495,15 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         await this.deviceManager.discoverDevices(skipStateFor);
         await this.waitForDiscoveredDevices();
         discoverySucceeded = true;
+        this.discoveryCompleted = true;
       }
     } catch (error) {
       this.log.error('Error during periodic device discovery:', error);
     } finally {
       if (discoverySucceeded) {
         this.handleOfflineDevices(discoveredDeviceIds);
-      } else {
+      } else if (!skippedForBudget) {
+        // Nothing failed when it was skipped for the budget
         this.log.warn('Skipping offline accessory reconciliation because periodic discovery did not complete successfully');
       }
       this.periodicDeviceDiscovering = false;
@@ -767,6 +844,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       }
     }
 
+    this.refuseWritesUntilFound(accessory);
+
     if (!this.configuredAccessories.has(accessory.UUID)) {
       this.log.debug(
         `Platform Accessory [${accessory.displayName}] with UUID [${accessory.UUID}] ` +
@@ -778,6 +857,24 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         `Platform Accessory [${accessory.displayName}] with UUID ` +
         `[${accessory.UUID}] is already in configuredAccessories.`,
       );
+    }
+  }
+
+  // A cached lock has no handlers until discovery finds it and the lock sets its own, which replace these. Until then
+  // HomeKit would accept a lock/unlock or access-code write and drop it, so it answers No Response instead. Reads show
+  // the cached values.
+  private refuseWritesUntilFound(accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>): void {
+    const { Characteristic: C, HapStatusError, HAPStatus } = this.api.hap;
+    const writable = [C.LockTargetState, C.AccessCodeControlPoint];
+    for (const service of accessory.services) {
+      for (const type of writable) {
+        if (service.testCharacteristic(type)) {
+          service.getCharacteristic(type).onSet(() => {
+            this.log.warn(`[${accessory.displayName}] has not been found since Homebridge started, so the write was not sent.`);
+            throw new HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+          });
+        }
+      }
     }
   }
 
