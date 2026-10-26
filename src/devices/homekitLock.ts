@@ -141,6 +141,49 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     return device.passcodes;
   }
 
+  // Whether a failed add or delete may still have changed the lock's codes (it got no answer, or no readable one), or
+  // may have failed because the cached list is out of date (TTLock turned down a code it already has, or one already
+  // deleted). Not when TTLock never got it, or turned it away before acting on it.
+  private passcodesMayHaveChanged(error: unknown): boolean {
+    if (!(error instanceof TTLockApiError)) {
+      return true;
+    }
+    if (error.networkFailure === 'notSent' || error.networkFailure === 'tls' || error.gatewayTransient) {
+      return false;
+    }
+    switch (error.category) {
+      case TTLockApiErrorCategory.AuthExpired:
+      case TTLockApiErrorCategory.AuthInvalid:
+      case TTLockApiErrorCategory.BudgetExhausted:
+      case TTLockApiErrorCategory.DeadlineExpired:
+      case TTLockApiErrorCategory.GatewayOffline:
+      case TTLockApiErrorCategory.RateLimited:
+        return false;
+      default:
+        return true;
+    }
+  }
+
+  // After a failed add or delete, read the list again: it says whether the change took effect, and keeps the cache
+  // from answering HomeKit with codes that are no longer right. Undefined when the codes cannot have changed, or the
+  // list could not be read; the cache is then dropped, so the next request reads the list.
+  private async recheckPasscodes(device: SysInfo, error: unknown): Promise<Passcode[] | undefined> {
+    if (!this.passcodesMayHaveChanged(error)) {
+      return undefined;
+    }
+    this.log.debug(`Reading the access codes on ${this.name} again to see whether the change took effect`);
+    try {
+      return await this.refreshPasscodes(device);
+    } catch (refreshError) {
+      delete device.passcodes;
+      this.log.debug(
+        `Could not read the access codes on ${this.name} again: ` +
+        `${refreshError instanceof Error ? refreshError.message : String(refreshError)}`,
+      );
+      return undefined;
+    }
+  }
+
   private getPasscodeIdentifier(passcode: Passcode): bigint {
     return BigInt(passcode.index);
   }
@@ -237,24 +280,55 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       const newPassCode = this.parsePasscodeRequest(element);
       const cachedPasscodes = await this.ensurePasscodesLoaded(device);
       let passcode = cachedPasscodes.find(existing => existing.passcode === newPassCode);
-      if (!passcode) {
-        this.log.info(`Adding a new passcode to ${this.name}`);
-        const newPasscode = await this.deviceManager!
-          .managePasscodes(device.device_id, 'add', newPassCode) as { keyboardPwdId: string };
-        const refreshedPasscodes = await this.refreshPasscodes(device);
-        passcode = refreshedPasscodes.find(existing =>
-          existing.passcode_id === newPasscode.keyboardPwdId.toString()
-          || existing.passcode === newPassCode,
-        );
-      } else {
+      if (passcode) {
         this.log.debug(`The passcode to add already exists on ${this.name} as passcode id ${passcode.passcode_id}`);
-      }
-      if (!passcode) {
-        throw new AccessCodeProtocolError('The new passcode was not listed on the lock after it was added');
+      } else {
+        passcode = await this.addPasscode(device, newPassCode);
       }
       records.push(this.buildPasscodeResponseRecord(passcode));
     }
     return `010103${records.join('0000')}`;
+  }
+
+  // An add that may have reached TTLock is not sent again, because TTLock may have applied it; the list says whether
+  // it did
+  private async addPasscode(device: SysInfo, newPassCode: string): Promise<Passcode> {
+    this.log.info(`Adding a new passcode to ${this.name}`);
+    let passcodeId: string;
+    try {
+      const added = await this.deviceManager!
+        .managePasscodes(device.device_id, 'add', newPassCode) as { keyboardPwdId?: unknown };
+      if (typeof added.keyboardPwdId !== 'number' && typeof added.keyboardPwdId !== 'string') {
+        throw new TTLockApiError(
+          'TTLock did not say which passcode id it added',
+          TTLockApiErrorCategory.InvalidResponse,
+          false,
+          'keyboardPwd/add',
+        );
+      }
+      passcodeId = String(added.keyboardPwdId);
+    } catch (error) {
+      const passcode = (await this.recheckPasscodes(device, error))?.find(existing => existing.passcode === newPassCode);
+      if (!passcode) {
+        throw error;
+      }
+      this.log.info(
+        `The passcode is on ${this.name} as passcode id ${passcode.passcode_id}, although TTLock did not confirm the add`,
+      );
+      return passcode;
+    }
+    // TTLock's answer says what was added. Reading the list again would cost a call and time HomeKit is waiting, and
+    // if that read failed, an add that was done would be answered as failed.
+    const cachedPasscodes = device.passcodes ?? [];
+    const passcode: Passcode = {
+      passcode_id: passcodeId,
+      // After the codes already listed: a delete leaves the others' indexes as they are
+      index: String(cachedPasscodes.reduce((last, existing) => Math.max(last, Number(existing.index)), -1) + 1),
+      lock_id: device.device_id,
+      passcode: newPassCode,
+    };
+    device.passcodes = [...cachedPasscodes, passcode];
+    return passcode;
   }
 
   private async buildDeleteResponse(
@@ -275,9 +349,26 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       throw new AccessCodeProtocolError(`Passcode identifier ${deletePasscodeIdentifier.toString()} was not found for delete`);
     }
     this.log.info(`Deleting passcode id ${passcode.passcode_id} on ${this.name}`);
-    await this.deviceManager!.managePasscodes(device.device_id, 'delete', passcode.passcode_id);
-    await this.refreshPasscodes(device);
+    await this.deletePasscode(device, passcode);
     return `010105${this.buildPasscodeResponseRecord(passcode)}`;
+  }
+
+  // Like an add, a delete that may have reached TTLock is not sent again; the list says whether it took effect
+  private async deletePasscode(device: SysInfo, passcode: Passcode): Promise<void> {
+    try {
+      await this.deviceManager!.managePasscodes(device.device_id, 'delete', passcode.passcode_id);
+    } catch (error) {
+      const passcodes = await this.recheckPasscodes(device, error);
+      if (!passcodes || passcodes.some(existing => existing.passcode_id === passcode.passcode_id)) {
+        throw error;
+      }
+      this.log.info(
+        `Passcode id ${passcode.passcode_id} is no longer on ${this.name}, although TTLock did not confirm the delete`,
+      );
+      return;
+    }
+    // TTLock confirmed it; as after an add, the list is not read again
+    device.passcodes = (device.passcodes ?? []).filter(existing => existing.passcode_id !== passcode.passcode_id);
   }
 
   private async setAccessCodeControlPoint(device: SysInfo, value: CharacteristicValue): Promise<string> {
