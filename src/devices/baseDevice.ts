@@ -42,6 +42,8 @@ export default abstract class HomeKitDevice {
   private unknownStatePollTimer: NodeJS.Timeout | undefined;
   protected updateEmitter = new EventEmitter();
   private consecutivePollFailures = 0;
+  // After this many failed polls in a row the lock shows No Response in HomeKit. Polling goes on, so it recovers
+  // as soon as the lock answers again.
   private readonly maxConsecutivePollFailures = 3;
 
   private static locks: Map<string, Promise<unknown>> = new Map();
@@ -50,7 +52,7 @@ export default abstract class HomeKitDevice {
   // performance.now() when this lock's last HomeKit write started or ended
   private lastWriteAt = 0;
 
-  protected getSysInfoDeferred: () => Promise<void>;
+  protected getSysInfoDeferred: () => Promise<boolean>;
 
   private services: Array<{
     serviceType: WithUUID<typeof Service>;
@@ -171,30 +173,33 @@ export default abstract class HomeKitDevice {
     return currentPromise as Promise<T>;
   }
 
+  // Not while the lock is offline: it is still polled and its commands are still sent, so it recovers by itself
   protected shouldSkipUpdate(): boolean {
-    return this.removedFromPlatform || this.ttlockDevice.offline || this.platform.isShuttingDown;
+    return this.removedFromPlatform || this.platform.isShuttingDown;
   }
 
-  protected async getSysInfo(): Promise<void> {
-    await this.getSysInfoDeferred();
+  protected async getSysInfo(): Promise<boolean> {
+    return await this.getSysInfoDeferred();
   }
 
-  private async fetchSysInfoInternal(): Promise<void> {
+  // True when the lock was read; false when it could not be asked
+  private async fetchSysInfoInternal(): Promise<boolean> {
     if (!this.deviceManager) {
       this.log.warn('Device manager not available');
-      return;
+      return false;
     }
     const deviceId = this.ttlockDevice.sys_info?.device_id;
     if (!deviceId) {
       this.log.warn('No device_id in sys_info');
-      return;
+      return false;
     }
     const updatedSysInfo = await this.deviceManager.getSysInfo(deviceId);
     if (!updatedSysInfo) {
-      throw new Error(`No sys_info returned for ${deviceId}. Marking offline and stopping polling.`);
+      throw new Error(`No sys_info returned for ${deviceId}`);
     }
     Object.assign(this.ttlockDevice.sys_info, updatedSysInfo);
     this.log.debug(`Updated sys_info: ${updatedSysInfo.alias ?? deviceId}`);
+    return true;
   }
 
   protected async refreshAndUpdateCharacteristics(forceUpdate: boolean): Promise<void> {
@@ -210,34 +215,19 @@ export default abstract class HomeKitDevice {
       }
       this.isUpdating = true;
       try {
-        await this.getSysInfo();
+        if (!await this.getSysInfo()) {
+          return;
+        }
+        this.markDeviceReachable();
         await this.updateAllServicesAndCharacteristics(forceUpdate);
         this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
-        this.consecutivePollFailures = 0;
-        this.ttlockDevice.offline = false;
       } catch (error) {
         if (error instanceof TTLockApiError && error.skipped) {
           // Not a failed poll: another request was using the gateway, and the next poll reads the lock
           this.log.debug('Poll skipped: the gateway is busy with another request');
           return;
         }
-        this.consecutivePollFailures++;
-        if (error instanceof Error && error.message.startsWith('No sys_info returned for ')) {
-          this.log.warn(`Poll update failed: ${error.message}`);
-        } else {
-          this.log.warn(
-            `Poll update error (failure ${this.consecutivePollFailures}/${this.maxConsecutivePollFailures}):`,
-            error,
-          );
-        }
-
-        if (this.shouldStopPollingForError(error)) {
-          this.log.error('Stopping polling and marking device offline due to persistent/non-recoverable errors');
-          this.ttlockDevice.offline = true;
-          await this.stopPolling();
-        } else {
-          this.log.debug('Keeping polling active; error appears recoverable/transient');
-        }
+        this.recordPollFailure(error);
       } finally {
         this.isUpdating = false;
         this.updateEmitter.emit('updateComplete');
@@ -336,7 +326,7 @@ export default abstract class HomeKitDevice {
     }
   }
 
-  // Discovery found a lock that was offline: read it now instead of at the next poll
+  // Discovery found a lock that does not answer its polls: read it now instead of at its next poll
   public updateAfterPeriodicDiscovery(): void {
     void this.refreshInBackground(true);
   }
@@ -416,6 +406,10 @@ export default abstract class HomeKitDevice {
   }
 
   private async genericOnGet(service: Service, descriptor: CharacteristicDescriptor): Promise<CharacteristicValue> {
+    // The cached values may be long out of date; HomeKit shows No Response until a poll reads the lock again
+    if (this.ttlockDevice.offline) {
+      throw this.communicationFailure();
+    }
     const context = this.buildDescriptorContext();
     try {
       const characteristic = service.getCharacteristic(descriptor.type);
@@ -427,10 +421,6 @@ export default abstract class HomeKitDevice {
       return value as CharacteristicValue;
     } catch (error) {
       this.log.error(`OnGet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
-      if (this.shouldStopPollingForError(error)) {
-        this.ttlockDevice.offline = true;
-        await this.stopPolling();
-      }
       return this.defaultValueForCharacteristic(descriptor.type);
     }
   }
@@ -452,11 +442,17 @@ export default abstract class HomeKitDevice {
       // The revert waits a tick as well: a command that fails at once could otherwise finish before HAP stores the value.
       // The command's time limit starts now, so time spent waiting behind a poll counts too.
       void runHomeKitWrite(LOCK_COMMAND_TIME_LIMIT_MS, () => this.executeDescriptorSet(service, descriptor, value))
-        .catch(error => this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error))
+        .catch(error => {
+          // A failed write was logged when it failed and comes back as a HAP status
+          if (!(error instanceof this.platform.api.hap.HapStatusError)) {
+            this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
+          }
+        })
         .then(() => setImmediate(() => this.revertTargetIfNeeded(service, descriptor, value, true)));
       return;
     }
-    // HomeKit waits for the answer, so nothing may be sent once it has stopped waiting
+    // HomeKit waits for the answer, so nothing may be sent once it has stopped waiting. A write that fails is
+    // answered with No Response, not with success.
     const result = await runHomeKitWrite(
       HOMEKIT_WRITE_TIME_LIMIT_MS,
       () => this.executeDescriptorSet(service, descriptor, value),
@@ -491,7 +487,10 @@ export default abstract class HomeKitDevice {
     const lockKey = this.makeLockKey();
     return await this.withLock(lockKey, async () => {
       if (this.shouldSkipUpdate()) {
-        return;
+        this.log.debug(
+          `Not sending the ${descriptor.name ?? descriptor.type.UUID} write: the lock was removed or Homebridge is shutting down`,
+        );
+        throw this.communicationFailure();
       }
       if (!this.deviceManager) {
         throw new Error('Device manager undefined');
@@ -537,10 +536,8 @@ export default abstract class HomeKitDevice {
         } else {
           this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
         }
-        if (this.shouldStopPollingForError(error)) {
-          this.ttlockDevice.offline = true;
-          await this.stopPolling();
-        }
+        // Tell HomeKit the write failed. A lock command was answered already; it is reverted instead.
+        throw this.communicationFailure();
       } finally {
         this.lastWriteAt = performance.now();
         this.isUpdating = false;
@@ -549,31 +546,64 @@ export default abstract class HomeKitDevice {
     });
   }
 
-  private shouldStopPollingForError(error: unknown): boolean {
+  // The lock answered (a poll read it, or TTLock carried out a command): it is reachable and seen now
+  protected markDeviceReachable(): void {
+    const now = new Date();
+    this.consecutivePollFailures = 0;
+    this.ttlockDevice.last_seen = now;
+    this.homebridgeAccessory.context.lastSeen = now;
+    this.setOfflineState(false);
+  }
+
+  private recordPollFailure(error: unknown): void {
+    this.consecutivePollFailures++;
     if (error instanceof Error && error.message.startsWith('No sys_info returned for ')) {
+      this.log.warn(`Poll update failed: ${error.message}`);
+    } else {
+      this.log.warn(
+        `Poll update error (${this.consecutivePollFailures} in a row):`,
+        error,
+      );
+    }
+    if (this.consecutivePollFailures >= this.maxConsecutivePollFailures && this.countsTowardOffline(error)) {
+      if (!this.ttlockDevice.offline) {
+        this.log.warn(
+          `No answer from the lock in ${this.consecutivePollFailures} polls in a row; HomeKit shows it as No Response. ` +
+          'Polling continues, so it recovers when the lock answers again.',
+        );
+      }
+      this.setOfflineState(true);
+    }
+  }
+
+  // Whether a failed poll says the lock cannot be reached. Gateway errors (offline, busy, could not reach the lock),
+  // network and server errors and bad answers do. A used-up API budget, a rejected login and a rate limit are about
+  // the whole plugin, not this lock, and a request that ran out of time was not sent.
+  private countsTowardOffline(error: unknown): boolean {
+    if (!(error instanceof TTLockApiError)) {
       return true;
     }
-
-    if (error instanceof TTLockApiError) {
-      switch (error.category) {
-        case TTLockApiErrorCategory.BudgetExhausted:
-        case TTLockApiErrorCategory.AuthExpired:
-        case TTLockApiErrorCategory.AuthInvalid:
-        case TTLockApiErrorCategory.DeadlineExpired:
-        case TTLockApiErrorCategory.NetworkTransient:
-        case TTLockApiErrorCategory.ServerTransient:
-        case TTLockApiErrorCategory.RateLimited:
-          return false;
-        case TTLockApiErrorCategory.ClientInvalidRequest:
-        case TTLockApiErrorCategory.GatewayOffline:
-        case TTLockApiErrorCategory.InvalidResponse:
-        case TTLockApiErrorCategory.Unknown:
-        default:
-          return this.consecutivePollFailures >= this.maxConsecutivePollFailures;
-      }
+    switch (error.category) {
+      case TTLockApiErrorCategory.AuthExpired:
+      case TTLockApiErrorCategory.AuthInvalid:
+      case TTLockApiErrorCategory.BudgetExhausted:
+      case TTLockApiErrorCategory.DeadlineExpired:
+      case TTLockApiErrorCategory.RateLimited:
+        return false;
+      default:
+        return true;
     }
+  }
 
-    return this.consecutivePollFailures >= this.maxConsecutivePollFailures;
+  // Only for this run: the cached accessory's own offline flag says whether TTLock still lists the lock, which
+  // decides whether it is removed after offlineInterval. A lock that TTLock lists but cannot reach is kept.
+  private setOfflineState(offline: boolean): void {
+    this.ttlockDevice.offline = offline;
+  }
+
+  // HomeKit shows the lock as No Response
+  protected communicationFailure(): HapStatusError {
+    return new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   }
 
   protected async updateAllServicesAndCharacteristics(forceUpdate: boolean): Promise<void> {

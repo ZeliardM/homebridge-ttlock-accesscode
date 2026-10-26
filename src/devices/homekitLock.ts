@@ -68,6 +68,9 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
             }
             throw error;
           }
+          // TTLock carried the command out through the gateway, so the lock answers again even if its last polls
+          // did not; HomeKit stops showing No Response without waiting for the next poll
+          this.markDeviceReachable();
           return true;
         },
         (value, context) => {
