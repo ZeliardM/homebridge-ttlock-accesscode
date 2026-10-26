@@ -61,14 +61,16 @@
         "type": "integer",
         "description": "How often to check TTLock device status in the background.",
         "default": 300,
-        "minimum": 30
+        "minimum": 30,
+        "maximum": 2147483
       },
       "discoveryPollingInterval": {
         "title": "Discovery Polling Interval (Hours)",
         "type": "integer",
         "description": "How often to discover new TTLock devices in the background.",
         "default": 12,
-        "minimum": 1
+        "minimum": 1,
+        "maximum": 596
       },
       "offlineInterval": {
         "title": "Offline Device Removal Interval (Days)",
@@ -82,7 +84,8 @@
         "type": "integer",
         "description": "The time to wait to combine similar commands for a device before sending a command.",
         "default": 100,
-        "minimum": 0
+        "minimum": 0,
+        "maximum": 60000
       },
       "externalDoors": {
         "title": "External Doors",

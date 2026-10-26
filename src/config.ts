@@ -309,17 +309,66 @@ function parseExternalDoorsConfig(externalDoors?: ExternalDoorsConfigInput): Ext
   };
 }
 
-export function parseConfig(config: Record<string, unknown>): TTLockAccessCodeConfig {
+// Node fires a timer given more than 2^31-1 ms (about 24.8 days) after 1 ms instead, so the intervals that drive
+// timers stay below that: 2147483 seconds for lock polling and 596 hours for discovery
+const MAX_POLLING_INTERVAL_SECONDS = 2147483;
+const MAX_DISCOVERY_POLLING_INTERVAL_HOURS = 596;
+const MAX_WAIT_TIME_UPDATE_MS = 60000;
+
+// Wrong types are errors. Numbers out of range are clamped with a warning instead, so a hand-edited value does not
+// stop the plugin.
+export function parseConfig(
+  config: Record<string, unknown>,
+  warn: (message: string) => void = () => undefined,
+): TTLockAccessCodeConfig {
+  if (!isObjectLike(config)) {
+    throw new ConfigParseError('Error parsing config');
+  }
+
   const errors = validateConfig(config);
   if (errors.length > 0) {
     throw new ConfigParseError('Error parsing config', errors);
   }
 
-  if (!isObjectLike(config)) {
-    throw new ConfigParseError('Error parsing config');
-  }
-
   const parsedConfig = config as TTLockAccessCodeConfigInput;
+
+  const clamp = (key: keyof TTLockAccessCodeConfigInput, value: number, min: number, max = Infinity): number => {
+    const clamped = Math.min(Math.max(value, min), max);
+    if (clamped !== value) {
+      const limit = value < min ? `below the minimum of ${min}` : `above the maximum of ${max}`;
+      warn(`\`${key}\` is ${value}, ${limit}; using ${clamped}.`);
+    }
+    return clamped;
+  };
+
+  const totalApiCallsPerMonth = clamp(
+    'totalApiCallsPerMonth',
+    parsedConfig.totalApiCallsPerMonth ?? defaultConfig.totalApiCallsPerMonth,
+    1,
+  );
+  const pollingInterval = clamp(
+    'pollingInterval',
+    parsedConfig.pollingInterval ?? defaultConfig.discoveryOptions.pollingInterval,
+    30,
+    MAX_POLLING_INTERVAL_SECONDS,
+  );
+  const discoveryPollingInterval = clamp(
+    'discoveryPollingInterval',
+    parsedConfig.discoveryPollingInterval ?? defaultConfig.discoveryOptions.discoveryPollingInterval,
+    1,
+    MAX_DISCOVERY_POLLING_INTERVAL_HOURS,
+  );
+  const offlineInterval = clamp(
+    'offlineInterval',
+    parsedConfig.offlineInterval ?? defaultConfig.discoveryOptions.offlineInterval,
+    1,
+  );
+  const waitTimeUpdate = clamp(
+    'waitTimeUpdate',
+    parsedConfig.waitTimeUpdate ?? defaultConfig.advancedOptions.waitTimeUpdate,
+    0,
+    MAX_WAIT_TIME_UPDATE_MS,
+  );
 
   return {
     name: parsedConfig.name ?? defaultConfig.name,
@@ -327,18 +376,14 @@ export function parseConfig(config: Record<string, unknown>): TTLockAccessCodeCo
     clientSecret: parsedConfig.clientSecret ?? defaultConfig.clientSecret,
     username: parsedConfig.username ?? defaultConfig.username,
     password: parsedConfig.password ?? defaultConfig.password,
-    totalApiCallsPerMonth: parsedConfig.totalApiCallsPerMonth ?? defaultConfig.totalApiCallsPerMonth,
+    totalApiCallsPerMonth,
     discoveryOptions: {
-      pollingInterval: (parsedConfig.pollingInterval ?? defaultConfig.discoveryOptions.pollingInterval) * 1000,
-      discoveryPollingInterval: (
-        (parsedConfig.discoveryPollingInterval ??
-          defaultConfig.discoveryOptions.discoveryPollingInterval)
-        * 60 * 60 * 1000
-      ),
-      offlineInterval: (parsedConfig.offlineInterval ?? defaultConfig.discoveryOptions.offlineInterval) * 24 * 60 * 60 * 1000,
+      pollingInterval: pollingInterval * 1000,
+      discoveryPollingInterval: discoveryPollingInterval * 60 * 60 * 1000,
+      offlineInterval: offlineInterval * 24 * 60 * 60 * 1000,
     },
     advancedOptions: {
-      waitTimeUpdate: parsedConfig.waitTimeUpdate ?? defaultConfig.advancedOptions.waitTimeUpdate,
+      waitTimeUpdate,
     },
     externalDoors: parseExternalDoorsConfig(parsedConfig.externalDoors),
   };

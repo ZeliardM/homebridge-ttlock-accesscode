@@ -69,13 +69,25 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private readonly homekitDevicesById: Map<string, HomeKitDevice> = new Map();
   private deviceDiscoveredHandler: ((device: TTLockDevice) => Promise<void>) | undefined;
   private discoveryInterval: NodeJS.Timeout | undefined;
+  private configInvalid = false;
   private platformInitialization: Promise<void>;
   private usageTierChangedHandler: (() => void) | undefined;
 
   constructor(public readonly log: Logging, config: PlatformConfig, public readonly api: API) {
     this.Service = this.api.hap.Service;
     this.Characteristic = this.api.hap.Characteristic;
-    this.config = parseConfig(config);
+    // Homebridge does not catch errors thrown here, so a bad config would stop the whole bridge.
+    // Log it and stay idle instead; cached accessories stay registered.
+    try {
+      this.config = parseConfig(config, message => this.log.warn(message));
+    } catch (error) {
+      this.log.error(
+        `Invalid configuration, so ${PLATFORM_NAME} will not start. Fix the plugin settings and restart Homebridge. ` +
+        (error instanceof Error ? error.message : String(error)),
+      );
+      this.config = parseConfig({});
+      this.configInvalid = true;
+    }
     this.periodicDeviceDiscoveryEmitter = new EventEmitter();
     this.taskQueue = new TaskQueue(this.log, () => this.isShuttingDown);
 
@@ -87,6 +99,9 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     this.api.on('didFinishLaunching', async () => {
       this.log.debug('TTLockAccessCode Platform finished launching');
       await this.platformInitialization;
+      if (this.configInvalid) {
+        return;
+      }
       await this.didFinishLaunching();
       if (this.offlineAccessories.size > 0) {
         this.log.debug('Unregistering offline accessories');

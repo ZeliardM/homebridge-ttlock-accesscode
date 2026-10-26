@@ -75,12 +75,12 @@
     return state.platformConfig.externalDoors;
   }
 
-  function parseNumber(value, fallback, minimum) {
+  function parseNumber(value, fallback, minimum, maximum = Infinity) {
     const numberValue = Number(String(value ?? '').trim());
     if (!Number.isFinite(numberValue)) {
       return fallback;
     }
-    return Math.max(minimum, Math.floor(numberValue));
+    return Math.min(maximum, Math.max(minimum, Math.floor(numberValue)));
   }
 
   function isAccountReady() {
@@ -232,6 +232,7 @@
     const value = escapeHtml(platformValue(field));
     const note = options.note ? `<div class="field-note">${escapeHtml(options.note)}</div>` : '';
     const min = options.min !== undefined ? `min="${escapeHtml(options.min)}"` : '';
+    const max = options.max !== undefined ? `max="${escapeHtml(options.max)}"` : '';
     const autoComplete = type === 'password' ? 'new-password' : 'off';
 
     return `
@@ -247,6 +248,7 @@
           value="${value}"
           autocomplete="${autoComplete}"
           ${min}
+          ${max}
         />
         ${note}
       </div>
@@ -584,6 +586,7 @@
           ${fieldHtml('pollingInterval', 'Lock Polling Interval (Seconds)', {
     type: 'number',
     min: 30,
+    max: 2147483,
     note: 'How often to check TTLock device status in the background.',
   })}
           ${showDoorPolling ? externalDoorFieldHtml('doorPollingInterval', 'Door Polling Interval (Seconds)', {
@@ -594,6 +597,7 @@
           ${fieldHtml('discoveryPollingInterval', 'Discovery Polling Interval (Hours)', {
     type: 'number',
     min: 1,
+    max: 596,
     note: 'How often to discover new TTLock devices in the background.',
   })}
           ${fieldHtml('offlineInterval', 'Offline Device Removal Interval (Days)', {
@@ -619,6 +623,7 @@
             ${fieldHtml('waitTimeUpdate', 'Wait Time Update (Milliseconds)', {
     type: 'number',
     min: 0,
+    max: 60000,
     note: 'The time to wait to combine similar commands for a device before sending a command.',
   })}
           </div>
@@ -685,10 +690,10 @@
       username: String(block.username || '').trim(),
       password: String(block.password || '').trim(),
       totalApiCallsPerMonth: parseNumber(block.totalApiCallsPerMonth, DEFAULTS.totalApiCallsPerMonth, 30000),
-      pollingInterval: parseNumber(block.pollingInterval, DEFAULTS.pollingInterval, 30),
-      discoveryPollingInterval: parseNumber(block.discoveryPollingInterval, DEFAULTS.discoveryPollingInterval, 1),
+      pollingInterval: parseNumber(block.pollingInterval, DEFAULTS.pollingInterval, 30, 2147483),
+      discoveryPollingInterval: parseNumber(block.discoveryPollingInterval, DEFAULTS.discoveryPollingInterval, 1, 596),
       offlineInterval: parseNumber(block.offlineInterval, DEFAULTS.offlineInterval, 1),
-      waitTimeUpdate: parseNumber(block.waitTimeUpdate, DEFAULTS.waitTimeUpdate, 0),
+      waitTimeUpdate: parseNumber(block.waitTimeUpdate, DEFAULTS.waitTimeUpdate, 0, 60000),
     };
 
     const externalDoorConfig = sanitizeExternalDoorsConfig(block.externalDoors);
