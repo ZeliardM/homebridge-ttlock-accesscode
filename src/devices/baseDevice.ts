@@ -14,7 +14,7 @@ import type {
 import { EventEmitter } from 'node:events';
 
 import accessoryInformation from './accessoryInformation.js';
-import DeviceManager from './deviceManager.js';
+import DeviceManager, { HOMEKIT_WRITE_TIME_LIMIT_MS, LOCK_COMMAND_TIME_LIMIT_MS, runHomeKitWrite } from './deviceManager.js';
 import { TTLockApiError, TTLockApiErrorCategory } from '../api/ttlockApi.js';
 import { deferAndCombine, prefixLogger } from '../utils.js';
 import type TTLockAccessCodePlatform from '../platform.js';
@@ -425,12 +425,17 @@ export default abstract class HomeKitDevice {
       // HomeKit shows "No Response" after about 10s, and lock commands through a gateway can take longer.
       // Answer now; if the command does not take effect, put the target back to the lock's real state.
       // The revert waits a tick as well: a command that fails at once could otherwise finish before HAP stores the value.
-      void this.executeDescriptorSet(service, descriptor, value, context)
+      // The command's time limit starts now, so time spent waiting behind a poll counts too.
+      void runHomeKitWrite(LOCK_COMMAND_TIME_LIMIT_MS, () => this.executeDescriptorSet(service, descriptor, value, context))
         .catch(error => this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error))
         .then(() => setImmediate(() => this.revertTargetIfNeeded(service, descriptor, value, true)));
       return;
     }
-    const result = await this.executeDescriptorSet(service, descriptor, value, context);
+    // HomeKit waits for the answer, so nothing may be sent once it has stopped waiting
+    const result = await runHomeKitWrite(
+      HOMEKIT_WRITE_TIME_LIMIT_MS,
+      () => this.executeDescriptorSet(service, descriptor, value, context),
+    );
     if (result !== undefined) {
       return result;
     }
@@ -496,7 +501,14 @@ export default abstract class HomeKitDevice {
         this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
         return result;
       } catch (error) {
-        this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
+        if (error instanceof TTLockApiError && error.category === TTLockApiErrorCategory.DeadlineExpired) {
+          this.log.warn(
+            `Did not send the ${descriptor.name ?? descriptor.type.UUID} write to TTLock (${error.endpoint ?? 'request'}): ` +
+            'HomeKit had stopped waiting for it',
+          );
+        } else {
+          this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
+        }
         if (this.shouldStopPollingForError(error)) {
           this.ttlockDevice.offline = true;
           await this.stopPolling();

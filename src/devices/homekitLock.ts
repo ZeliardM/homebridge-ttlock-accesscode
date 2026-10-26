@@ -4,7 +4,8 @@ import type { CharacteristicValue, Service, WithUUID } from 'homebridge';
 import pkg from 'ber-tlv';
 
 import HomeKitDevice from './baseDevice.js';
-import { LockCommandBlockedError } from './deviceManager.js';
+import { LOCK_COMMAND_TIME_LIMIT_MS, LockCommandBlockedError } from './deviceManager.js';
+import { TTLockApiError, TTLockApiErrorCategory } from '../api/ttlockApi.js';
 import {
   buildAccessCodeDescriptors,
   buildBatteryDescriptors,
@@ -55,6 +56,14 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
             // The door changed while the command was waiting or retrying
             if (error instanceof LockCommandBlockedError) {
               this.log.warn(`Stopped ${action} command for ${context.alias}: ${error.message}`);
+              return false;
+            }
+            // It waited too long (behind a poll or another request) to be sure the lock would not move late
+            if (error instanceof TTLockApiError && error.category === TTLockApiErrorCategory.DeadlineExpired) {
+              this.log.warn(
+                `Did not send ${action} to ${context.alias}: it could no longer finish within ` +
+                `${LOCK_COMMAND_TIME_LIMIT_MS / 1000}s of the request`,
+              );
               return false;
             }
             throw error;

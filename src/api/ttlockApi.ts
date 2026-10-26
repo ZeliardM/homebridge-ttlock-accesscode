@@ -116,12 +116,22 @@ type ApiErrorPayload = {
   errmsg?: string;
 };
 
-type RequestOptions = {
-  // Retry gateway busy / lock unreachable errors (only lock commands; a failed poll waits for the next poll)
+export type RequestOptions = {
+  // Which failures are sent again: 'transient' (the default) retries errors that may pass; 'notSent' only failures
+  // that prove TTLock did not act on the request (for writes that must not be applied twice); 'none' never retries
+  retry?: 'transient' | 'notSent' | 'none';
+  // Also retry gateway busy / lock unreachable errors (only lock commands; a failed poll waits for the next poll)
   retryGatewayErrors?: boolean;
-  // Only retry if the retry, including its timeout, could finish within this many ms of the first attempt
-  deadlineMs?: number;
+  // performance.now() time after which no attempt, the first included, is sent
+  sendBy?: number | undefined;
+  // performance.now() time by which a retry, including its full timeout, must be able to finish
+  finishBy?: number | undefined;
   // Runs before every attempt; throw to abort the request without sending it
+  beforeAttempt?: (() => void) | undefined;
+};
+
+export type LockCommandOptions = {
+  finishBy: number;
   beforeAttempt?: (() => void) | undefined;
 };
 
@@ -142,16 +152,17 @@ export class TTLockApi {
   private authUsername: string | null = null;
   private authPassword: string | null = null;
   private readonly requestTimeoutMs = 15000;
-  // These endpoints reach the lock through its gateway over Bluetooth and can take 15s+
+  // Requests that reach the lock through its gateway over Bluetooth can take 15s+
   private readonly gatewayRequestTimeoutMs = 25000;
   private readonly maxRetries = 3;
   // A request that TTLock asks to wait longer than this before retrying is not retried: the wait would hold up
   // the lock's other requests. The next poll or discovery tries again.
   private readonly maxRetryDelayMs = 10000;
-  // A lock command is not retried unless the retry could finish within this long of the first attempt,
-  // so a lock never moves long after it was asked to
-  private readonly lockCommandDeadlineMs = 45000;
-  private static readonly gatewayEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
+  // Gateway requests that are safe to send again after the gateway could not reach the lock (errcode 1): reads and
+  // lock/unlock. Not passcode add/delete, which TTLock may have applied.
+  private static readonly resendSafeGatewayEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
+  // Requests that go through the lock's gateway; passcodes are added and deleted via the gateway (addType/deleteType 2)
+  private static readonly viaGatewayEndpoints = [...TTLockApi.resendSafeGatewayEndpoints, 'keyboardPwd/add', 'keyboardPwd/delete'];
   // Error codes TTLock returns for a rejected or expired token and for too many requests
   private static readonly authErrcodes = [10002, 10003, 10004, 10005, 10006];
   private static readonly rateLimitErrcodes = [10018, 10019, 10020];
@@ -322,9 +333,9 @@ export class TTLockApi {
     options: RequestOptions = {},
   ): Promise<T> {
     const fullEndpoint = `v3/${endpoint}`;
-    const timeout = TTLockApi.gatewayEndpoints.includes(endpoint) ? this.gatewayRequestTimeoutMs : this.requestTimeoutMs;
-    const startedAt = Date.now();
+    const timeout = TTLockApi.viaGatewayEndpoints.includes(endpoint) ? this.gatewayRequestTimeoutMs : this.requestTimeoutMs;
     let authRecoveryAttempted = false;
+    // The last failure that was not resolved by logging in again
     let lastError: TTLockApiError | undefined;
 
     // Under the token mutex, so requests that start together before the first login log in only once
@@ -341,7 +352,9 @@ export class TTLockApi {
     }
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      // Outside the try: a guard that refuses the request must not be retried
+      // Outside the try: a request whose time ran out, or that a guard refuses, is neither counted nor retried.
+      // This also covers the resend after logging in again, which can take two cloud requests.
+      this.ensureTimeLeft(endpoint, options, lastError);
       options.beforeAttempt?.();
       // Every attempt is a real API call, so every attempt counts against the budget. The resend after a new
       // login is not a first attempt, even though it does not use up an attempt.
@@ -396,32 +409,22 @@ export class TTLockApi {
         return response.data as T;
       } catch (error) {
         const normalized = this.normalizeError(error, endpoint);
-        lastError = normalized;
 
         if (normalized.authRelated && !authRecoveryAttempted) {
           authRecoveryAttempted = true;
           this.log.warn(`Auth failure for ${endpoint}; attempting internal re-authentication`);
           await this.recoverAuthentication(attemptedToken, endpoint);
           // The resend with the new token does not use up an attempt, so it happens even after the last one.
-          // Like any retry, it must still be able to finish within the deadline.
-          if (options.deadlineMs !== undefined && Date.now() - startedAt + timeout > options.deadlineMs) {
-            throw new TTLockApiError(
-              `Not sent: the time for ${endpoint} ran out before it could be sent again after logging in`,
-              TTLockApiErrorCategory.DeadlineExpired,
-              false,
-              endpoint,
-            );
-          }
+          // Like any attempt, it is only sent if its time has not run out (checked at the top of the loop).
           attempt--;
           continue;
         }
+        lastError = normalized;
 
         const isLastAttempt = attempt >= this.maxRetries;
-        const retryable = normalized.retryable || (normalized.gatewayTransient && options.retryGatewayErrors === true);
         const delay = Math.max(this.getRetryDelayMs(attempt), normalized.retryAfterMs ?? 0);
-        const pastDeadline = options.deadlineMs !== undefined &&
-          Date.now() - startedAt + delay + timeout > options.deadlineMs;
-        if (!isLastAttempt && retryable && !pastDeadline && delay <= this.maxRetryDelayMs) {
+        const fitsInTime = options.finishBy === undefined || performance.now() + delay + timeout <= options.finishBy;
+        if (!isLastAttempt && this.shouldRetry(normalized, options) && fitsInTime && delay <= this.maxRetryDelayMs) {
           this.log.warn(
             `Retryable TTLock API error on ${endpoint}; category=${normalized.category}; ` +
             `attempt=${attempt + 1}/${this.maxRetries + 1}; retrying in ${delay}ms`,
@@ -441,6 +444,24 @@ export class TTLockApi {
       throw lastError;
     }
     throw new TTLockApiError('Max retries reached', TTLockApiErrorCategory.Unknown, false, endpoint);
+  }
+
+  // A request whose time ran out is not sent. A retry that can no longer be sent in time ends with the failure
+  // that called for it.
+  private ensureTimeLeft(endpoint: string, options: RequestOptions, lastError: TTLockApiError | undefined): void {
+    if (options.sendBy === undefined || performance.now() <= options.sendBy) {
+      return;
+    }
+    if (lastError) {
+      this.logApiError(`Request failed for ${endpoint}`, lastError);
+      throw lastError;
+    }
+    throw new TTLockApiError(
+      `Not sent: the time for ${endpoint} ran out before it could be sent`,
+      TTLockApiErrorCategory.DeadlineExpired,
+      false,
+      endpoint,
+    );
   }
 
   private async reserveApiCall(endpoint: string, firstAttempt: boolean): Promise<void> {
@@ -500,9 +521,9 @@ export class TTLockApi {
     if (errcode === -3002) {
       return this.gatewayOfflineError(errmsg, endpoint, errcode);
     }
-    // -3003: the gateway is busy. errcode 1 ("failed or means no") on a gateway endpoint: the gateway could not
-    // reach the lock this time. Gateway endpoints are reads or idempotent lock/unlock, so sending them again is safe.
-    if (errcode === -3003 || (errcode === 1 && TTLockApi.gatewayEndpoints.includes(endpoint))) {
+    // -3003: the gateway is busy. errcode 1 ("failed or means no") on a read or lock/unlock through the gateway: the
+    // gateway could not reach the lock this time. Those are safe to send again; a passcode add or delete is not.
+    if (errcode === -3003 || (errcode === 1 && TTLockApi.resendSafeGatewayEndpoints.includes(endpoint))) {
       const error = new TTLockApiError(
         errcode === -3003 ? `TTLock gateway busy: ${errmsg}` : `TTLock gateway could not reach the lock: ${errmsg}`,
         TTLockApiErrorCategory.ServerTransient,
@@ -721,6 +742,19 @@ export class TTLockApi {
     return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
   }
 
+  private shouldRetry(error: TTLockApiError, options: RequestOptions): boolean {
+    switch (options.retry ?? 'transient') {
+      case 'none':
+        return false;
+      case 'notSent':
+        // Only failures that prove TTLock did not act on the request: it never reached TTLock, the gateway was
+        // busy, or TTLock turned it away for too many requests
+        return error.networkFailure === 'notSent' || error.errcode === -3003 || error.category === TTLockApiErrorCategory.RateLimited;
+      case 'transient':
+        return error.retryable || (error.gatewayTransient && options.retryGatewayErrors === true);
+    }
+  }
+
   private getRetryDelayMs(attempt: number): number {
     const baseDelay = Math.min(8000, Math.pow(2, attempt) * 1000);
     const jitter = Math.floor(Math.random() * 250);
@@ -855,10 +889,11 @@ export class TTLockApi {
   }
 
   // A busy gateway or a lock it briefly cannot reach must not drop the lock until the next discovery (12h by
-  // default). Return undefined instead, so the lock is kept and the next poll fills in its state.
+  // default). Return undefined instead, so the lock is kept and the next poll fills in its state. Not retried:
+  // the lock's polls read the state again anyway, and retries would hold up the rest of discovery.
   private async queryStateForDiscovery(lockId: string): Promise<{ state: number } | undefined> {
     try {
-      return await this.makeAuthenticatedRequest<{ state: number }>('lock/queryOpenState', 'GET', { lockId });
+      return await this.makeAuthenticatedRequest<{ state: number }>('lock/queryOpenState', 'GET', { lockId }, { retry: 'none' });
     } catch (error) {
       const temporary = error instanceof TTLockApiError && (
         error.gatewayTransient ||
@@ -877,11 +912,14 @@ export class TTLockApi {
 
   public async getSysInfo(lockId: string): Promise<Partial<SysInfo>> {
     this.log.debug(`Fetching sys_info for lock: ${lockId}`);
+    // A failed poll is not retried: the next poll reads the lock again, and retries would hold up the lock's
+    // commands, which wait for the poll to finish
+    const pollOptions: RequestOptions = { retry: 'none' };
     const sysInfo: Partial<SysInfo> = {};
     const stateResponse = await this.makeAuthenticatedRequest<{
       state: number;
       electricQuantity?: number;
-    }>('lock/queryOpenState', 'GET', { lockId });
+    }>('lock/queryOpenState', 'GET', { lockId }, pollOptions);
     const state = this.toHomeKitLockState(stateResponse.state);
     if (state === undefined) {
       // Showing a state TTLock did not send would be a guess; keep the last known one
@@ -903,6 +941,7 @@ export class TTLockApi {
           'lock/queryElectricQuantity',
           'GET',
           { lockId },
+          pollOptions,
         );
         electricQuantity = batteryResponse.electricQuantity;
       } catch (error) {
@@ -946,24 +985,31 @@ export class TTLockApi {
     }
   }
 
-  // beforeAttempt runs before every attempt, including retries, so a safety check can stop a retry
-  public async lock(lockId: string, beforeAttempt?: () => void): Promise<void> {
+  // finishBy: performance.now() time by which the command must be done, so a lock never moves long after it was
+  // asked to. beforeAttempt runs before every attempt, including retries, so a safety check can stop a retry.
+  public async lock(lockId: string, options: LockCommandOptions): Promise<void> {
     this.log.debug(`Locking lock: ${lockId}`);
-    await this.makeAuthenticatedRequest('lock/lock', 'POST', { lockId }, this.lockCommandOptions(beforeAttempt));
+    await this.makeAuthenticatedRequest('lock/lock', 'POST', { lockId }, this.lockCommandOptions(options));
     this.log.debug(`Lock ${lockId} locked`);
   }
 
-  public async unlock(lockId: string, beforeAttempt?: () => void): Promise<void> {
+  public async unlock(lockId: string, options: LockCommandOptions): Promise<void> {
     this.log.debug(`Unlocking lock: ${lockId}`);
-    await this.makeAuthenticatedRequest('lock/unlock', 'POST', { lockId }, this.lockCommandOptions(beforeAttempt));
+    await this.makeAuthenticatedRequest('lock/unlock', 'POST', { lockId }, this.lockCommandOptions(options));
     this.log.debug(`Lock ${lockId} unlocked`);
   }
 
-  private lockCommandOptions(beforeAttempt?: () => void): RequestOptions {
-    return { retryGatewayErrors: true, deadlineMs: this.lockCommandDeadlineMs, beforeAttempt };
+  // Even the first attempt is only sent if it can finish, timeout included, by finishBy
+  private lockCommandOptions(options: LockCommandOptions): RequestOptions {
+    return {
+      retryGatewayErrors: true,
+      sendBy: options.finishBy - this.gatewayRequestTimeoutMs,
+      finishBy: options.finishBy,
+      beforeAttempt: options.beforeAttempt,
+    };
   }
 
-  public async getPasscodes(lockId: string): Promise<Passcode[]> {
+  public async getPasscodes(lockId: string, options: RequestOptions = {}): Promise<Passcode[]> {
     this.log.debug(`Fetching passcodes for lock: ${lockId}`);
     const response = await this.makeAuthenticatedRequest<{
       list: {
@@ -975,7 +1021,7 @@ export class TTLockApi {
       pageSize: number;
       pages: number;
       total: number;
-    }>('lock/listKeyboardPwd', 'GET', { lockId, pageNo: 1, pageSize: 1000, orderBy: 0 });
+    }>('lock/listKeyboardPwd', 'GET', { lockId, pageNo: 1, pageSize: 1000, orderBy: 0 }, options);
 
     if (!response.list || !Array.isArray(response.list)) {
       this.log.error('Invalid response format: expected list of passcodes');
@@ -996,25 +1042,27 @@ export class TTLockApi {
     }));
   }
 
-  public async addPasscode(lockId: string, passcode: string): Promise<{ keyboardPwdId: string }> {
+  // A passcode add or delete that got no answer may have been applied, so it is only sent again when it surely was
+  // not. sendBy: performance.now() time after which it is not sent, and by which a retry would have to finish.
+  public async addPasscode(lockId: string, passcode: string, sendBy?: number): Promise<{ keyboardPwdId: string }> {
     this.log.debug(`Adding passcode to lock: ${lockId}`);
     const response = await this.makeAuthenticatedRequest<{ keyboardPwdId: string }>('keyboardPwd/add', 'POST', {
       lockId,
       keyboardPwd: passcode,
       keyboardPwdType: 2,
       addType: 2,
-    });
+    }, { retry: 'notSent', sendBy, finishBy: sendBy });
     this.log.debug(`Passcode added to lock: ${lockId}`);
     return response;
   }
 
-  public async deletePasscode(lockId: string, passcodeId: string): Promise<void> {
+  public async deletePasscode(lockId: string, passcodeId: string, sendBy?: number): Promise<void> {
     this.log.debug(`Deleting passcode for lock: ${lockId}`);
     await this.makeAuthenticatedRequest('keyboardPwd/delete', 'POST', {
       lockId,
       keyboardPwdId: passcodeId,
       deleteType: 2,
-    });
+    }, { retry: 'notSent', sendBy, finishBy: sendBy });
     this.log.debug(`Passcode deleted for lock: ${lockId}`);
   }
 }

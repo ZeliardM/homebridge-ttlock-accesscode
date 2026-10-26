@@ -1,5 +1,6 @@
 import type { CharacteristicValue, Logger } from 'homebridge';
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { EventEmitter } from 'node:events';
 
 import TTLockAccessCodePlatform from '../platform.js';
@@ -12,7 +13,25 @@ import type {
   DirigeraDoorSensorUpdate,
 } from '../api/dirigeraApi.js';
 import type { ManualDoorHubConfig } from '../config.js';
+import { TTLockApiError, TTLockApiErrorCategory } from '../api/ttlockApi.js';
 import type { TTLockApi } from '../api/ttlockApi.js';
+
+// HomeKit gives up on a write after 9 s (HAP answers OPERATION_TIMED_OUT); keep ~40 ms of it for the reply.
+// Access-code writes are answered when they are done, so they get this long.
+export const HOMEKIT_WRITE_TIME_LIMIT_MS = 8960;
+// A lock command is answered to HomeKit at once and sent in the background, but must not move the lock long after
+// it was asked to. Counted from the HomeKit request, so time spent waiting behind a poll counts too.
+export const LOCK_COMMAND_TIME_LIMIT_MS = 60000;
+// performance.now() time by which the HomeKit write being handled must be done
+const homeKitWriteDeadline = new AsyncLocalStorage<number>();
+
+export function runHomeKitWrite<T>(limitMs: number, write: () => Promise<T>): Promise<T> {
+  return homeKitWriteDeadline.run(performance.now() + limitMs, write);
+}
+
+function isDeadlineExpired(error: unknown): boolean {
+  return error instanceof TTLockApiError && error.category === TTLockApiErrorCategory.DeadlineExpired;
+}
 
 export const deviceEventEmitter = new EventEmitter();
 
@@ -231,19 +250,21 @@ export default class DeviceManager {
         throw new LockCommandBlockedError(blockReason);
       }
     };
+    const finishBy = homeKitWriteDeadline.getStore() ?? performance.now() + LOCK_COMMAND_TIME_LIMIT_MS;
     try {
       switch (action) {
         case 'lock':
-          await this.api.lock(deviceId, ensureNotBlocked);
+          await this.api.lock(deviceId, { finishBy, beforeAttempt: ensureNotBlocked });
           break;
         case 'unlock':
-          await this.api.unlock(deviceId, ensureNotBlocked);
+          await this.api.unlock(deviceId, { finishBy, beforeAttempt: ensureNotBlocked });
           break;
         default:
           throw new Error(`Unsupported action: ${action} for feature: ${feature}`);
       }
     } catch (error) {
-      if (error instanceof LockCommandBlockedError) {
+      // Not sent; the caller tells the user why
+      if (error instanceof LockCommandBlockedError || isDeadlineExpired(error)) {
         throw error;
       }
       this.log.error(`Failed to perform action ${action} on device ${deviceId} for feature ${feature}:`, error);
@@ -256,19 +277,25 @@ export default class DeviceManager {
     operation: string,
     passcode?: string,
   ): Promise<Passcode[] | { keyboardPwdId: string } | void> {
+    // An add or delete is not sent once HomeKit has stopped waiting for it. A read has no time limit, so the
+    // passcode list can still be refreshed after a slow write.
+    const sendBy = homeKitWriteDeadline.getStore();
     try {
       switch (operation) {
         case 'add':
-          return await this.api.addPasscode(deviceId, passcode!);
+          return await this.api.addPasscode(deviceId, passcode!, sendBy);
         case 'delete':
-          await this.api.deletePasscode(deviceId, passcode!);
+          await this.api.deletePasscode(deviceId, passcode!, sendBy);
           break;
         case 'get':
-          return await this.api.getPasscodes(deviceId);
+          return await this.api.getPasscodes(deviceId, { retry: 'notSent' });
         default:
           throw new Error(`Unsupported passcode operation: ${operation}`);
       }
     } catch (error) {
+      if (isDeadlineExpired(error)) {
+        throw error;
+      }
       this.log.error(`Failed to manage passcodes on device ${deviceId} for operation ${operation}:`, error);
       throw error;
     }
