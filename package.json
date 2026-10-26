@@ -34,6 +34,7 @@
     "homebridge-plugin",
     "homebridge-ttlock",
     "homebridge-ttlock-accesscode",
+    "homekit",
     "smarthome",
     "smart home",
     "smart lock",
