@@ -533,6 +533,14 @@ export default abstract class HomeKitDevice {
             `Did not send the ${descriptor.name ?? descriptor.type.UUID} write to TTLock (${error.endpoint ?? 'request'}): ` +
             'HomeKit had stopped waiting for it',
           );
+        } else if (error instanceof TTLockApiError) {
+          // TTLock's answer in one line, no stack trace; only at debug when the request has logged it already
+          const message = `Could not set ${descriptor.name ?? descriptor.type.UUID}: ${error.message}`;
+          if (error.wasLogged) {
+            this.log.debug(message);
+          } else {
+            this.log.warn(message);
+          }
         } else {
           this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
         }
@@ -548,22 +556,34 @@ export default abstract class HomeKitDevice {
 
   // The lock answered (a poll read it, or TTLock carried out a command): it is reachable and seen now
   protected markDeviceReachable(): void {
+    const failures = this.consecutivePollFailures;
+    const wasOffline = this.ttlockDevice.offline;
     const now = new Date();
     this.consecutivePollFailures = 0;
     this.ttlockDevice.last_seen = now;
     this.homebridgeAccessory.context.lastSeen = now;
     this.setOfflineState(false);
+    if (failures > 0) {
+      this.log.info(
+        `Recovered communication with the lock after ${failures} failed poll${failures === 1 ? '' : 's'}` +
+        (wasOffline ? '; HomeKit no longer shows it as No Response' : ''),
+      );
+    }
   }
 
+  // A run of failed polls is logged once: a warning for the first one and debug after that, and a warning when
+  // HomeKit starts showing No Response. The recovery is logged once too (markDeviceReachable).
   private recordPollFailure(error: unknown): void {
     this.consecutivePollFailures++;
-    if (error instanceof Error && error.message.startsWith('No sys_info returned for ')) {
-      this.log.warn(`Poll update failed: ${error.message}`);
+    const reason = error instanceof Error ? error.message : String(error);
+    if (this.consecutivePollFailures === 1) {
+      this.log.warn(`Poll failed: ${reason}`);
     } else {
-      this.log.warn(
-        `Poll update error (${this.consecutivePollFailures} in a row):`,
-        error,
-      );
+      this.log.debug(`Poll failed (${this.consecutivePollFailures} in a row): ${reason}`);
+    }
+    if (error instanceof Error && !(error instanceof TTLockApiError) && error.stack) {
+      // Not an answer from TTLock, so keep where it came from
+      this.log.debug(error.stack);
     }
     if (this.consecutivePollFailures >= this.maxConsecutivePollFailures && this.countsTowardOffline(error)) {
       if (!this.ttlockDevice.offline) {

@@ -13,7 +13,7 @@ import type {
   DirigeraDoorSensorUpdate,
 } from '../api/dirigeraApi.js';
 import type { ManualDoorHubConfig } from '../config.js';
-import { TTLockApiError, TTLockApiErrorCategory } from '../api/ttlockApi.js';
+import { TTLockApiError } from '../api/ttlockApi.js';
 import type { TTLockApi } from '../api/ttlockApi.js';
 
 // HomeKit gives up on a write after 9 s (HAP answers OPERATION_TIMED_OUT); keep ~40 ms of it for the reply.
@@ -27,10 +27,6 @@ const homeKitWriteDeadline = new AsyncLocalStorage<number>();
 
 export function runHomeKitWrite<T>(limitMs: number, write: () => Promise<T>): Promise<T> {
   return homeKitWriteDeadline.run(performance.now() + limitMs, write);
-}
-
-function isDeadlineExpired(error: unknown): boolean {
-  return error instanceof TTLockApiError && error.category === TTLockApiErrorCategory.DeadlineExpired;
 }
 
 export const deviceEventEmitter = new EventEmitter();
@@ -117,6 +113,7 @@ export default class DeviceManager {
         deviceEventEmitter.emit('deviceDiscovered', device);
       }
     } catch (error) {
+      // The platform logs a failed discovery
       this.handleManagerError(error, 'discoverDevices');
       throw error;
     }
@@ -219,7 +216,7 @@ export default class DeviceManager {
     try {
       return await this.api.getSysInfo(deviceId);
     } catch (error) {
-      // A poll skipped because the gateway was busy is not an error
+      // The lock logs a failed poll; a poll skipped because the gateway was busy is not an error
       if (!(error instanceof TTLockApiError && error.skipped)) {
         this.handleManagerError(error, 'getSysInfo');
       }
@@ -254,24 +251,16 @@ export default class DeviceManager {
       }
     };
     const finishBy = homeKitWriteDeadline.getStore() ?? performance.now() + LOCK_COMMAND_TIME_LIMIT_MS;
-    try {
-      switch (action) {
-        case 'lock':
-          await this.api.lock(deviceId, { finishBy, beforeAttempt: ensureNotBlocked });
-          break;
-        case 'unlock':
-          await this.api.unlock(deviceId, { finishBy, beforeAttempt: ensureNotBlocked });
-          break;
-        default:
-          throw new Error(`Unsupported action: ${action} for feature: ${feature}`);
-      }
-    } catch (error) {
-      // Not sent; the caller tells the user why
-      if (error instanceof LockCommandBlockedError || isDeadlineExpired(error)) {
-        throw error;
-      }
-      this.log.error(`Failed to perform action ${action} on device ${deviceId} for feature ${feature}:`, error);
-      throw error;
+    // A failure is not logged here: the lock logs it, or why the command was not sent
+    switch (action) {
+      case 'lock':
+        await this.api.lock(deviceId, { finishBy, beforeAttempt: ensureNotBlocked });
+        break;
+      case 'unlock':
+        await this.api.unlock(deviceId, { finishBy, beforeAttempt: ensureNotBlocked });
+        break;
+      default:
+        throw new Error(`Unsupported action: ${action} for feature: ${feature}`);
     }
   }
 
@@ -283,35 +272,29 @@ export default class DeviceManager {
     // An add or delete is not sent once HomeKit has stopped waiting for it. A read has no time limit, so the
     // passcode list can still be refreshed after a slow write.
     const sendBy = homeKitWriteDeadline.getStore();
-    try {
-      switch (operation) {
-        case 'add':
-          return await this.api.addPasscode(deviceId, passcode!, sendBy);
-        case 'delete':
-          await this.api.deletePasscode(deviceId, passcode!, sendBy);
-          break;
-        case 'get':
-          return await this.api.getPasscodes(deviceId, { retry: 'notSent' });
-        default:
-          throw new Error(`Unsupported passcode operation: ${operation}`);
-      }
-    } catch (error) {
-      if (isDeadlineExpired(error)) {
-        throw error;
-      }
-      this.log.error(`Failed to manage passcodes on device ${deviceId} for operation ${operation}:`, error);
-      throw error;
+    // A failure is not logged here: the lock logs the failed access-code write
+    switch (operation) {
+      case 'add':
+        return await this.api.addPasscode(deviceId, passcode!, sendBy);
+      case 'delete':
+        await this.api.deletePasscode(deviceId, passcode!, sendBy);
+        break;
+      case 'get':
+        return await this.api.getPasscodes(deviceId, { retry: 'notSent' });
+      default:
+        throw new Error(`Unsupported passcode operation: ${operation}`);
     }
   }
 
+  // Only at debug: the caller logs the failure once, at the level it calls for
   private handleManagerError(error: unknown, context: string): void {
     if (error instanceof Error) {
-      this.log.error(`[${context}] Error: ${error.message}`);
+      this.log.debug(`[${context}] Error: ${error.message}`);
       if (error.stack) {
         this.log.debug(error.stack);
       }
       return;
     }
-    this.log.error(`[${context}] Unknown error: ${JSON.stringify(error)}`);
+    this.log.debug(`[${context}] Unknown error: ${JSON.stringify(error)}`);
   }
 }

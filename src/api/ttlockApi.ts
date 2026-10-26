@@ -130,6 +130,9 @@ export type RequestOptions = {
   finishBy?: number | undefined;
   // Skip the request (it fails with skipped set) instead of waiting while the gateway queue is busy (polls)
   skipIfGatewayBusy?: boolean;
+  // The caller logs a failure itself and says which lock it was (a poll logs once per run of failed polls); it is
+  // logged here at debug only
+  callerLogsFailure?: boolean;
   // Runs before every attempt; throw to abort the request without sending it
   beforeAttempt?: (() => void) | undefined;
 };
@@ -412,9 +415,7 @@ export class TTLockApi {
         continue;
       }
 
-      if (!this.isGatewayOfflineError(normalized)) {
-        this.logApiError(`Request failed for ${endpoint}`, normalized);
-      }
+      this.logRequestFailure(endpoint, normalized, options);
       throw normalized;
     }
 
@@ -483,7 +484,7 @@ export class TTLockApi {
       return;
     }
     if (lastError) {
-      this.logApiError(`Request failed for ${endpoint}`, lastError);
+      this.logRequestFailure(endpoint, lastError, options);
       throw lastError;
     }
     throw new TTLockApiError(
@@ -533,6 +534,17 @@ export class TTLockApi {
         false,
         endpoint,
       );
+    }
+  }
+
+  // A request that failed for good. An offline gateway is left to the caller, which knows which lock it is.
+  private logRequestFailure(endpoint: string, error: TTLockApiError, options: RequestOptions): void {
+    if (options.callerLogsFailure) {
+      this.log.debug(`Request failed for ${endpoint}: ${error.message}`);
+      return;
+    }
+    if (!this.isGatewayOfflineError(error)) {
+      this.logApiError(`Request failed for ${endpoint}`, error);
     }
   }
 
@@ -969,8 +981,8 @@ export class TTLockApi {
     this.log.debug(`Fetching sys_info for lock: ${lockId}`);
     // A failed poll is not retried: the next poll reads the lock again, and retries would hold up the lock's
     // commands, which wait for the poll to finish. Nor does it wait for the gateway: while another request uses
-    // the gateway queue, the poll is skipped.
-    const pollOptions: RequestOptions = { retry: 'none', skipIfGatewayBusy: true };
+    // the gateway queue, the poll is skipped. The lock logs a failed poll, once per run of failures.
+    const pollOptions: RequestOptions = { retry: 'none', skipIfGatewayBusy: true, callerLogsFailure: true };
     const sysInfo: Partial<SysInfo> = {};
     const stateResponse = await this.makeAuthenticatedRequest<{
       state: number;
