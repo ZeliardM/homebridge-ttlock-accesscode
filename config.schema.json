@@ -82,7 +82,7 @@
       "waitTimeUpdate": {
         "title": "Wait Time Update (Milliseconds)",
         "type": "integer",
-        "description": "The time to wait to combine similar commands for a device before sending a command.",
+        "description": "The time to wait to combine similar commands for a device before sending a command. Default: 100.",
         "default": 100,
         "minimum": 0,
         "maximum": 60000
@@ -168,12 +168,13 @@
     "clientSecret",
     "username",
     "password",
-    "totalApiCallsPerMonth",
     {
       "type": "fieldset",
-      "title": "Polling and API Usage",
+      "title": "Polling and API Usage (Optional)",
+      "description": "Customize how often locks are polled and devices are discovered. Polling slows down automatically to stay within the monthly API budget.",
       "expandable": true,
       "items": [
+        "totalApiCallsPerMonth",
         "pollingInterval",
         "discoveryPollingInterval",
         "offlineInterval"
@@ -213,7 +214,8 @@
     },
     {
       "type": "fieldset",
-      "title": "Advanced",
+      "title": "Advanced Settings (Optional)",
+      "description": "Don't change these, unless you understand what you're doing.",
       "expandable": true,
       "items": [
         "waitTimeUpdate"
