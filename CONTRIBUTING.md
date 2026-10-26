@@ -56,7 +56,8 @@ Labels pick the CHANGELOG section and the version bump. When a PR is opened and 
 A PR needs at least one of these labels to pass validation. Changing `src/` alone adds no label, so use a branch prefix.
 
 ## Security / Quality
-- CodeQL runs on PRs.
+- Build, lint, import and package checks run on every pull request into beta (Node 22, 24 and 26).
+- CodeQL runs when a release is published.
 - Dependabot weekly updates target beta.
 
 ## Questions
