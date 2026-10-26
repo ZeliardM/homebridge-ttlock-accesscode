@@ -183,6 +183,10 @@ export class TTLockApi {
   // Error codes TTLock returns for a rejected or expired token and for too many requests
   private static readonly authErrcodes = [10002, 10003, 10004, 10005, 10006];
   private static readonly rateLimitErrcodes = [10018, 10019, 10020];
+  // Set by stop(): nothing more is sent
+  private stopped = false;
+  // Wake the waits in progress (before a retry, or for the gap between gateway requests) when the client stops
+  private readonly sleepWakers = new Set<() => void>();
 
   constructor(private log: Logging, private clientId: string, private clientSecret: string, usageTracker?: UsageTracker) {
     this.apiClient = axios.create({
@@ -194,6 +198,15 @@ export class TTLockApi {
     });
     this.log.debug('TTLockApi initialized');
     this.usageTracker = usageTracker;
+  }
+
+  // Homebridge is shutting down. A request already sent is left to finish, but nothing more is sent: no retry, no
+  // login and no request still waiting for the gateway, so a lock does not move after Homebridge has stopped.
+  public stop(): void {
+    this.stopped = true;
+    for (const wake of this.sleepWakers) {
+      wake();
+    }
   }
 
   private encryptPassword(password: string): string {
@@ -302,6 +315,7 @@ export class TTLockApi {
         this.log.debug(`Token already refreshed by a concurrent request for endpoint ${endpoint}`);
         return;
       }
+      this.ensureNotStopped(endpoint);
 
       if (this.refreshToken) {
         try {
@@ -362,7 +376,8 @@ export class TTLockApi {
     }
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      // Do not wait for the gateway once the time has run out
+      // Do not wait for the gateway once the time has run out, or once Homebridge is shutting down
+      this.ensureNotStopped(endpoint, options, lastError);
       this.ensureTimeLeft(endpoint, options, lastError);
       // Held for this attempt only, so other requests can go between retries and while logging in again
       const releaseGateway = viaGateway ? await this.acquireGatewayQueue(endpoint, options) : undefined;
@@ -371,6 +386,7 @@ export class TTLockApi {
       try {
         // Outside the request's catch: a request whose time ran out (also while it waited for the gateway), or that
         // a guard refuses, is neither counted nor retried. This also covers the resend after logging in again.
+        this.ensureNotStopped(endpoint, options, lastError);
         this.ensureTimeLeft(endpoint, options, lastError);
         options.beforeAttempt?.();
         // Every attempt is a real API call, so every attempt counts against the budget. The resend after a new
@@ -404,7 +420,7 @@ export class TTLockApi {
       const isLastAttempt = attempt >= this.maxRetries;
       const delay = Math.max(this.getRetryDelayMs(attempt), normalized.retryAfterMs ?? 0);
       const fitsInTime = options.finishBy === undefined || performance.now() + delay + timeout <= options.finishBy;
-      if (!isLastAttempt && this.shouldRetry(normalized, options) && fitsInTime && delay <= this.maxRetryDelayMs) {
+      if (!isLastAttempt && !this.stopped && this.shouldRetry(normalized, options) && fitsInTime && delay <= this.maxRetryDelayMs) {
         this.log.warn(
           `Retryable TTLock API error on ${endpoint}; category=${normalized.category}; ` +
           `attempt=${attempt + 1}/${this.maxRetries + 1}; retrying in ${delay}ms`,
@@ -491,6 +507,29 @@ export class TTLockApi {
       false,
       endpoint,
     );
+  }
+
+  // Nothing is sent once the client has stopped. Like a retry whose time ran out, a retry that is not sent ends with
+  // the failure that called for it.
+  private ensureNotStopped(endpoint: string, options: RequestOptions = {}, lastError?: TTLockApiError): void {
+    if (!this.stopped) {
+      return;
+    }
+    if (lastError) {
+      this.logRequestFailure(endpoint, lastError, options);
+      throw lastError;
+    }
+    this.log.debug(`Not sending ${endpoint}: Homebridge is shutting down`);
+    const error = new TTLockApiError(
+      `Not sent: Homebridge is shutting down (${endpoint})`,
+      TTLockApiErrorCategory.Unknown,
+      false,
+      endpoint,
+    );
+    // TTLock never got it, so it cannot have changed anything
+    error.networkFailure = 'notSent';
+    error.wasLogged = true;
+    throw error;
   }
 
   // Waits for this request's turn at the gateway, then for the gap after the previous gateway request. A poll does
@@ -832,8 +871,20 @@ export class TTLockApi {
     return baseDelay + jitter;
   }
 
+  // Ends early when the client stops, so a wait does not hold up Homebridge's shutdown
   private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    if (this.stopped) {
+      return Promise.resolve();
+    }
+    return new Promise(resolve => {
+      const wake = () => {
+        clearTimeout(timer);
+        this.sleepWakers.delete(wake);
+        resolve();
+      };
+      const timer = setTimeout(wake, ms);
+      this.sleepWakers.add(wake);
+    });
   }
 
   private isObject(value: unknown): value is Record<string, unknown> {

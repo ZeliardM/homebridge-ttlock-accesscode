@@ -158,6 +158,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       if (!this.isShuttingDown) {
         this.isShuttingDown = true;
       }
+      // First: a lock command or discovery request that is retrying or waiting for the gateway is not sent any more
+      this.ttLockApi?.stop();
       this.startupRetry?.wake();
       if (this.discoveryRetryTimer) {
         clearTimeout(this.discoveryRetryTimer);
@@ -460,7 +462,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.discoveryCompleted = true;
       }
     } catch (error) {
-      this.log.error('Error during discoverDevices:', error);
+      if (this.isShuttingDown) {
+        this.log.debug(`Device discovery stopped by shutdown: ${error instanceof Error ? error.message : String(error)}`);
+      } else {
+        this.log.error('Error during discoverDevices:', error);
+      }
     }
   }
 
@@ -511,9 +517,16 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.discoveryCompleted = true;
       }
     } catch (error) {
-      this.log.error('Error during periodic device discovery:', error);
+      if (this.isShuttingDown) {
+        this.log.debug(`Periodic device discovery stopped by shutdown: ${error instanceof Error ? error.message : String(error)}`);
+      } else {
+        this.log.error('Error during periodic device discovery:', error);
+      }
     } finally {
-      if (discoverySucceeded) {
+      if (this.isShuttingDown) {
+        // Shutdown stops the requests and drops the locks found after it started, so every lock would look gone
+        this.log.debug('Skipping offline accessory reconciliation because Homebridge is shutting down');
+      } else if (discoverySucceeded) {
         this.handleOfflineDevices(discoveredDeviceIds);
       } else if (!skippedForBudget) {
         // Nothing failed when it was skipped for the budget
@@ -660,10 +673,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
     try {
       await this.createAndAuthenticateApi();
-      this.log.debug('TTLock API process started successfully');
+      this.log.debug('TTLock API started');
     } catch (error) {
       await this.stopTTLockApi();
-      this.log.error(`Error starting TTLock API process: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      this.log.error(`Error starting TTLock API: ${error instanceof Error ? error.message : 'Unknown error'}`);
       throw error;
     }
   }
@@ -685,11 +698,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     }
 
     if (this.ttLockApi) {
-      this.log.debug('TTLock API process found, attempting to kill the process');
+      this.log.debug('Releasing TTLock API client');
+      this.ttLockApi.stop();
       this.ttLockApi = undefined;
-      this.log.debug('TTLock API process successfully killed');
     } else {
-      this.log.debug('No TTLock API process found to stop');
+      this.log.debug('No TTLock API client to release');
     }
   }
 

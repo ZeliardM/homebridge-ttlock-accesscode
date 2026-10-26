@@ -46,7 +46,7 @@ export class UsageTracker extends EventEmitter {
   private log: Logging;
   private api: API;
   private mutex = new SimpleMutex();
-  private rolloverInterval?: NodeJS.Timeout;
+  private rolloverInterval: NodeJS.Timeout | undefined;
   private currentTier = 0;
   private pendingReserved = 0;
   // Every call saves the usage, so a failing save is logged once until it works again
@@ -393,12 +393,14 @@ export class UsageTracker extends EventEmitter {
   }
 
   public async stop(): Promise<void> {
+    // Before waiting for the mutex, so a save that hangs cannot keep the timer
+    if (this.rolloverInterval) {
+      clearInterval(this.rolloverInterval);
+      this.rolloverInterval = undefined;
+    }
     const release = await this.mutex.acquire();
     try {
       await this.persist();
-      if (this.rolloverInterval) {
-        clearInterval(this.rolloverInterval);
-      }
     } finally {
       release();
     }
