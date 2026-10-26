@@ -17,7 +17,7 @@ node -e "import('./dist/index.js').then(() => console.log('import OK'))"
 npm pack --dry-run   # must list dist/, config.schema.json and homebridge-ui/
 ```
 
-There are no unit tests. CI runs these same checks on Node 22 and 24.
+There are no unit tests. CI runs these same checks on Node 22, 24 and 26.
 
 Deploy: `homebridge-deploy --plugin homebridge-ttlock-accesscode` (only after my yes).
 

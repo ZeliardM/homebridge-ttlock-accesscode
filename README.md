@@ -25,7 +25,7 @@ This plug-in lets you control TTLock locks in the Apple Home app with lock/unloc
 
 ## Requirements
 - Homebridge Supported Versions: 1.11.2 or later, including Homebridge 2.x.
-- Node.js Supported Versions: 22 and 24.
+- Node.js Supported Versions: 22, 24, and 26.
 - TTLock Smart Lock.
 - TTLock Gateway for non-Wi-Fi locks.
 - Remote Unlock enabled in the TTLock mobile app.
