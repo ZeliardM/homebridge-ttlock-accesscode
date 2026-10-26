@@ -34,6 +34,11 @@ export interface Passcode {
   passcode_id: string;
   lock_id: string;
   passcode: string;
+  // TTLock keyboardPwdType: 2 permanent, 3 valid from start_date to end_date (ms; 0 for none); the others are
+  // one-time, cyclic or erase codes. Undefined when TTLock does not say.
+  type?: number | undefined;
+  start_date?: number | undefined;
+  end_date?: number | undefined;
 }
 
 export interface DescriptorContext {

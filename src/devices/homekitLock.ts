@@ -16,6 +16,10 @@ import type { CharacteristicDescriptor, Lock, Passcode, SysInfo } from './device
 
 const { TlvFactory } = pkg;
 
+// TTLock keyboardPwdType values of the codes HomeKit is shown; codes added from HomeKit are permanent
+const PERMANENT_PASSCODE_TYPE = 2;
+const PERIOD_PASSCODE_TYPE = 3;
+
 class AccessCodeProtocolError extends Error {}
 
 export default class HomeKitDeviceLock extends HomeKitDevice {
@@ -315,9 +319,35 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     return passcodeRecord.value.toString();
   }
 
+  // A HomeKit access code opens the lock whenever it is entered, so HomeKit is shown only codes that do: permanent
+  // codes, and period codes within their period. One-time, cyclic and erase codes, and period codes that have not
+  // started or have ended, stay on the lock but are not shown. A code TTLock gives no type for is shown, as before.
+  private usablePasscodes(passcodes: Passcode[]): Passcode[] {
+    const now = Date.now();
+    return passcodes.filter(passcode => {
+      switch (passcode.type) {
+        case undefined:
+        case PERMANENT_PASSCODE_TYPE:
+          return true;
+        case PERIOD_PASSCODE_TYPE:
+          return (!passcode.start_date || passcode.start_date <= now) &&
+            (!passcode.end_date || passcode.end_date > now);
+        default:
+          return false;
+      }
+    });
+  }
+
   private async buildListResponse(device: SysInfo): Promise<string> {
     const passcodes = await this.ensurePasscodesLoaded(device);
-    const records = passcodes.map(passcode => {
+    const usable = this.usablePasscodes(passcodes);
+    if (usable.length < passcodes.length) {
+      this.log.debug(
+        `Not showing ${passcodes.length - usable.length} access code(s) on ${this.name} that are not permanent or not ` +
+        'valid now',
+      );
+    }
+    const records = usable.map(passcode => {
       this.log.debug(`Passcode id ${passcode.passcode_id} found on ${this.name}`);
       return this.buildPasscodeResponseRecord(passcode);
     });
@@ -328,7 +358,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     device: SysInfo,
     decodedTlv: Array<{ value: Buffer }>,
   ): Promise<string> {
-    const passcodes = await this.ensurePasscodesLoaded(device);
+    const passcodes = this.usablePasscodes(await this.ensurePasscodesLoaded(device));
     const records = decodedTlv.slice(1).map((element) => {
       const passcodeIdentifier = this.parseIdentifierRequest(element, 'Read');
       const passcode = this.findPasscodeByIdentifier(passcodes, passcodeIdentifier);
@@ -348,7 +378,9 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     const records: string[] = [];
     for (const element of decodedTlv.slice(1)) {
       const newPassCode = this.parsePasscodeRequest(element);
-      const cachedPasscodes = await this.ensurePasscodesLoaded(device);
+      // Only a usable code counts: one with the same digits that has ended does not open the lock. TTLock decides
+      // whether it takes the new code anyway.
+      const cachedPasscodes = this.usablePasscodes(await this.ensurePasscodesLoaded(device));
       let passcode = cachedPasscodes.find(existing => existing.passcode === newPassCode);
       if (passcode) {
         this.log.debug(`The passcode to add already exists on ${this.name} as passcode id ${passcode.passcode_id}`);
@@ -378,8 +410,17 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       }
       passcodeId = String(added.keyboardPwdId);
     } catch (error) {
-      const passcode = (await this.recheckPasscodes(device, error))?.find(existing => existing.passcode === newPassCode);
+      const sameCode = (await this.recheckPasscodes(device, error))?.filter(existing => existing.passcode === newPassCode);
+      const passcode = sameCode && this.usablePasscodes(sameCode)[0];
       if (!passcode) {
+        // HomeKit is not shown that code, so nothing there tells why TTLock may have turned the new one down
+        const hidden = sameCode?.[0];
+        if (hidden) {
+          this.log.warn(
+            `The passcode to add is already on ${this.name} as passcode id ${hidden.passcode_id}, which is not permanent ` +
+            'or not valid now; remove it in the TTLock app to add the code from HomeKit',
+          );
+        }
         throw error;
       }
       this.log.info(
@@ -389,7 +430,12 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     }
     // TTLock's answer says what was added. Reading the list again would cost a call and time HomeKit is waiting, and
     // if that read failed, an add that was done would be answered as failed.
-    const passcode: Passcode = { passcode_id: passcodeId, lock_id: device.device_id, passcode: newPassCode };
+    const passcode: Passcode = {
+      passcode_id: passcodeId,
+      lock_id: device.device_id,
+      passcode: newPassCode,
+      type: PERMANENT_PASSCODE_TYPE,
+    };
     this.setCachedPasscodes(device, [...(device.passcodes ?? []), passcode]);
     return passcode;
   }
@@ -404,6 +450,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     }
     const records: string[] = [];
     for (const element of deleteRequests) {
+      // Any code TTLock lists: HomeKit may have been shown it before it ended, and may still remove it
       const passcodes = await this.ensurePasscodesLoaded(device);
       const deletePasscodeIdentifier = this.parseIdentifierRequest(element, 'Delete');
       const passcode = this.findPasscodeByIdentifier(passcodes, deletePasscodeIdentifier);

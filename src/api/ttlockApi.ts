@@ -1111,11 +1111,13 @@ export class TTLockApi {
   public async getPasscodes(lockId: string, options: RequestOptions = {}): Promise<Passcode[]> {
     this.log.debug(`Fetching passcodes for lock: ${lockId}`);
     const response = await this.makeAuthenticatedRequest<{
-      list: {
-        keyboardPwdId: string;
-        lockId: string;
-        keyboardPwd: string;
-      }[];
+      list: ({
+        keyboardPwdId?: unknown;
+        keyboardPwd?: unknown;
+        keyboardPwdType?: unknown;
+        startDate?: unknown;
+        endDate?: unknown;
+      } | null)[];
       pageNo: number;
       pageSize: number;
       pages: number;
@@ -1132,12 +1134,35 @@ export class TTLockApi {
       );
     }
 
-    this.log.debug(`Found ${response.list.length} passcodes for lock: ${lockId}`);
-    return response.list.map(item => ({
-      passcode_id: item.keyboardPwdId.toString(),
-      lock_id: item.lockId.toString(),
-      passcode: item.keyboardPwd,
-    }));
+    // An entry without an id or a code cannot be sent to HomeKit; it is left out, and the rest of the list is still
+    // used
+    const passcodes: Passcode[] = [];
+    for (const item of response.list) {
+      const passcodeId = item?.keyboardPwdId;
+      const passcode = item?.keyboardPwd;
+      if (!item || (typeof passcodeId !== 'number' && typeof passcodeId !== 'string') || passcodeId === '' ||
+        typeof passcode !== 'string' || passcode === '') {
+        continue;
+      }
+      passcodes.push({
+        passcode_id: String(passcodeId),
+        lock_id: String(lockId),
+        passcode,
+        type: this.toOptionalNumber(item.keyboardPwdType),
+        start_date: this.toOptionalNumber(item.startDate),
+        end_date: this.toOptionalNumber(item.endDate),
+      });
+    }
+    const leftOut = response.list.length - passcodes.length;
+    this.log.debug(
+      `Found ${passcodes.length} passcodes for lock: ${lockId}` +
+      (leftOut > 0 ? ` (left out ${leftOut} without a passcode id or code)` : ''),
+    );
+    return passcodes;
+  }
+
+  private toOptionalNumber(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
   }
 
   // A passcode add or delete that got no answer may have been applied, so it is only sent again when it surely was
