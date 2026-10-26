@@ -227,8 +227,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         attempt++;
         const delayMs = Math.min(5 * 60 * 1000, Math.pow(2, Math.min(attempt, 8)) * 1000);
         this.log.error(
-          `TTLock API startup attempt ${attempt} failed; retrying in ${Math.floor(delayMs / 1000)}s:`,
-          error,
+          `TTLock API startup attempt ${attempt} failed; retrying in ${Math.floor(delayMs / 1000)}s: ` +
+          (error instanceof Error ? error.message : String(error)),
         );
         await new Promise(resolve => setTimeout(resolve, delayMs));
       }
@@ -693,7 +693,9 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   }
 
   private async createHomeKitDevice(ttlockDevice: TTLockDevice): Promise<HomeKitDevice | undefined> {
-    this.log.debug('Creating HomeKit device for:', ttlockDevice.sys_info);
+    // Never log the access codes themselves
+    const { passcodes, ...sysInfo } = ttlockDevice.sys_info;
+    this.log.debug('Creating HomeKit device for:', { ...sysInfo, passcodes: passcodes?.length ?? 0 });
     return await create(this, ttlockDevice);
   }
 

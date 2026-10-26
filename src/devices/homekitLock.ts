@@ -193,7 +193,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
   private async buildListResponse(device: SysInfo): Promise<string> {
     const passcodes = await this.ensurePasscodesLoaded(device);
     const records = passcodes.map(passcode => {
-      this.log.debug(`Passcode ${passcode.passcode} found on ${this.name}`);
+      this.log.debug(`Passcode id ${passcode.passcode_id} found on ${this.name}`);
       return this.buildPasscodeResponseRecord(passcode);
     });
     return `010101${records.join('0000')}`;
@@ -210,7 +210,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       if (!passcode) {
         throw new AccessCodeProtocolError(`Passcode identifier ${passcodeIdentifier.toString()} was not found for read`);
       }
-      this.log.debug(`Reading passcode ${passcode.passcode} on ${this.name}`);
+      this.log.debug(`Reading passcode id ${passcode.passcode_id} on ${this.name}`);
       return this.buildPasscodeResponseRecord(passcode);
     });
     return `010102${records.join('0000')}`;
@@ -226,7 +226,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       const cachedPasscodes = await this.ensurePasscodesLoaded(device);
       let passcode = cachedPasscodes.find(existing => existing.passcode === newPassCode);
       if (!passcode) {
-        this.log.info(`Adding new passcode ${newPassCode} to ${this.name}`);
+        this.log.info(`Adding a new passcode to ${this.name}`);
         const newPasscode = await this.deviceManager!
           .managePasscodes(device.device_id, 'add', newPassCode) as { keyboardPwdId: string };
         const refreshedPasscodes = await this.refreshPasscodes(device);
@@ -235,10 +235,10 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
           || existing.passcode === newPassCode,
         );
       } else {
-        this.log.debug(`Passcode ${newPassCode} already exists on ${this.name}`);
+        this.log.debug(`The passcode to add already exists on ${this.name} as passcode id ${passcode.passcode_id}`);
       }
       if (!passcode) {
-        throw new AccessCodeProtocolError(`Passcode ${newPassCode} was not available after add`);
+        throw new AccessCodeProtocolError('The new passcode was not listed on the lock after it was added');
       }
       records.push(this.buildPasscodeResponseRecord(passcode));
     }
@@ -262,7 +262,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     if (!passcode) {
       throw new AccessCodeProtocolError(`Passcode identifier ${deletePasscodeIdentifier.toString()} was not found for delete`);
     }
-    this.log.info(`Deleting passcode ${passcode.passcode} on ${this.name}`);
+    this.log.info(`Deleting passcode id ${passcode.passcode_id} on ${this.name}`);
     await this.deviceManager!.managePasscodes(device.device_id, 'delete', passcode.passcode_id);
     await this.refreshPasscodes(device);
     return `010105${this.buildPasscodeResponseRecord(passcode)}`;
@@ -272,7 +272,8 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     this.setLockBusy(true);
     try {
       const decodedTlv = TlvFactory.parse(Buffer.from(String(value), 'base64').toString('hex'));
-      this.log.debug(`Decoded TLV for AccessCodeControlPoint on ${this.name}:`, decodedTlv);
+      // The records carry the access codes, so log only how many there are
+      this.log.debug(`Decoded AccessCodeControlPoint request on ${this.name}: ${decodedTlv.length} TLV record(s)`);
 
       let requestType = '';
       let responseTlv = '';

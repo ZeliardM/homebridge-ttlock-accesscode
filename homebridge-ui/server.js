@@ -35,6 +35,12 @@ function requestError(message, status = 400) {
   return new RequestError(message, { status });
 }
 
+// plugin-ui-utils writes any error that is not a RequestError to the log with console.error, and a raw
+// error can carry the request with the client secret, password hash or access token. Pass on the message only.
+function toRequestError(error) {
+  return error instanceof RequestError ? error : requestError(error instanceof Error ? error.message : String(error), 500);
+}
+
 function getRequiredString(payload, field, label) {
   const value = String(payload?.[field] ?? '').trim();
   if (!value) {
@@ -86,13 +92,21 @@ class TTLockAccessCodeUiServer extends HomebridgePluginUiServer {
   }
 
   async testTTLockAuth(payload) {
-    await createTTLockApi(payload);
-    return { ok: true };
+    try {
+      await createTTLockApi(payload);
+      return { ok: true };
+    } catch (error) {
+      throw toRequestError(error);
+    }
   }
 
   async listTTLockLocks(payload) {
-    const api = await createTTLockApi(payload);
-    return api.listLocksForSetup();
+    try {
+      const api = await createTTLockApi(payload);
+      return await api.listLocksForSetup();
+    } catch (error) {
+      throw toRequestError(error);
+    }
   }
 
   async authenticateDirigera(payload) {

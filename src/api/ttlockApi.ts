@@ -3,6 +3,7 @@ import type { Logging } from 'homebridge';
 import axios from 'axios';
 import crypto from 'crypto';
 import { AxiosInstance } from 'axios';
+import { inspect } from 'node:util';
 
 import { UsageTracker } from './usageTracker.js';
 import { SimpleMutex } from '../utils.js';
@@ -24,6 +25,9 @@ export class TTLockApiError extends Error {
   public wasLogged = false;
   // The gateway was busy or could not reach the lock; the request is safe to send again
   public gatewayTransient = false;
+  // Only the code of the underlying error is kept. An axios error holds the request it failed on, which carries
+  // the client secret, the password hash or the access token, and a logged error must never print those.
+  public readonly causeCode: string | undefined;
 
   constructor(
     message: string,
@@ -32,14 +36,21 @@ export class TTLockApiError extends Error {
     public readonly endpoint?: string,
     public readonly statusCode?: number,
     public readonly errcode?: number,
-    public readonly cause?: unknown,
+    cause?: unknown,
   ) {
     super(message);
     this.name = 'TTLockApiError';
+    this.causeCode = axios.isAxiosError(cause) ? (cause.code ?? 'AxiosError') : cause instanceof Error ? cause.name : undefined;
   }
 
   public get authRelated(): boolean {
     return this.category === TTLockApiErrorCategory.AuthExpired || this.category === TTLockApiErrorCategory.AuthInvalid;
+  }
+
+  // Loggers format extra arguments with util.inspect; keep a logged error to this one line
+  [inspect.custom](): string {
+    return `${this.name}: ${this.message} (category=${this.category} endpoint=${this.endpoint ?? 'n/a'} ` +
+      `status=${this.statusCode ?? 'n/a'} errcode=${this.errcode ?? 'n/a'} cause=${this.causeCode ?? 'n/a'})`;
   }
 }
 
@@ -141,7 +152,8 @@ export class TTLockApi {
         this.log.info('Authenticated with TTLock API');
       } else {
         throw new TTLockApiError(
-          `Authentication failed: invalid token response (${JSON.stringify(response.data)})`,
+          'Authentication failed: no token in response ' +
+          `(errcode=${response.data.errcode ?? 'n/a'} errmsg=${response.data.errmsg ?? 'n/a'})`,
           TTLockApiErrorCategory.AuthInvalid,
           false,
           'oauth2/token',
@@ -193,7 +205,8 @@ export class TTLockApi {
         this.log.debug('Access token refreshed');
       } else {
         throw new TTLockApiError(
-          `Failed to refresh token: invalid response (${JSON.stringify(response.data)})`,
+          'Failed to refresh token: no token in response ' +
+          `(errcode=${response.data.errcode ?? 'n/a'} errmsg=${response.data.errmsg ?? 'n/a'})`,
           TTLockApiErrorCategory.AuthInvalid,
           false,
           'oauth2/token',
