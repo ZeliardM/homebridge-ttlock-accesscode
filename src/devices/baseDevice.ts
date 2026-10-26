@@ -26,6 +26,11 @@ import type {
 } from './deviceTypes.js';
 import type { TTLockAccessoryContext } from '../platform.js';
 
+// A lock whose state is not known yet is read this soon after polling starts, a few seconds apart per position, instead
+// of at its slot up to a whole polling interval later
+const UNKNOWN_STATE_POLL_DELAY_MS = 2000;
+const UNKNOWN_STATE_POLL_STAGGER_MS = 5000;
+
 export default abstract class HomeKitDevice {
   readonly log: Logger;
   protected deviceManager: DeviceManager | undefined;
@@ -34,6 +39,7 @@ export default abstract class HomeKitDevice {
   protected previousSnapshot?: TTLockDevice;
   protected pollingInterval: NodeJS.Timeout | undefined;
   private pollingStartTimer: NodeJS.Timeout | undefined;
+  private unknownStatePollTimer: NodeJS.Timeout | undefined;
   protected updateEmitter = new EventEmitter();
   private consecutivePollFailures = 0;
   private readonly maxConsecutivePollFailures = 3;
@@ -261,12 +267,34 @@ export default abstract class HomeKitDevice {
         effectiveInterval,
       );
     }, firstPollDelay);
+    // HomeKit shows the lock as Unknown (discovery could not read its state, or TTLock did not know it): read it soon
+    // rather than at the slot. Still staggered, because locks that share a gateway and are polled together find it busy.
+    if (!this.isLockStateKnown()) {
+      const unknownStatePollDelay = UNKNOWN_STATE_POLL_DELAY_MS + index * UNKNOWN_STATE_POLL_STAGGER_MS;
+      if (unknownStatePollDelay < firstPollDelay) {
+        this.log.debug(`Lock state unknown; reading it in ${unknownStatePollDelay}ms`);
+        this.unknownStatePollTimer = setTimeout(() => {
+          this.unknownStatePollTimer = undefined;
+          void this.refreshInBackground(false);
+        }, unknownStatePollDelay);
+      }
+    }
+  }
+
+  private isLockStateKnown(): boolean {
+    const { SECURED, UNSECURED } = this.platform.Characteristic.LockCurrentState;
+    const state = this.ttlockDevice.sys_info.state;
+    return state === SECURED || state === UNSECURED;
   }
 
   private clearPollingTimers(): void {
     if (this.pollingStartTimer) {
       clearTimeout(this.pollingStartTimer);
       this.pollingStartTimer = undefined;
+    }
+    if (this.unknownStatePollTimer) {
+      clearTimeout(this.unknownStatePollTimer);
+      this.unknownStatePollTimer = undefined;
     }
     if (this.pollingInterval) {
       clearInterval(this.pollingInterval);

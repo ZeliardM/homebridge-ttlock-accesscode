@@ -108,10 +108,10 @@ export default class DeviceManager {
     return `${blockingReasons.join('; ')}; TTLock command was not sent`;
   }
 
-  public async discoverDevices(): Promise<void> {
+  public async discoverDevices(skipStateFor?: ReadonlySet<string>): Promise<void> {
     this.log.debug('Starting device discovery...');
     try {
-      const devices = await this.api.getDevices();
+      const devices = await this.api.getDevices(skipStateFor);
       for (const device of devices) {
         this.log.debug(`Discovered device: ${device.sys_info.alias} (${device.sys_info.device_id})`);
         deviceEventEmitter.emit('deviceDiscovered', device);

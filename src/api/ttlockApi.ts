@@ -856,7 +856,9 @@ export class TTLockApi {
     return locks;
   }
 
-  public async getDevices(): Promise<TTLockDevice[]> {
+  // skipStateFor: locks whose state is not read, because their own polls keep it current. Each read is an API call
+  // and a gateway request.
+  public async getDevices(skipStateFor: ReadonlySet<string> = new Set()): Promise<TTLockDevice[]> {
     const response = await this.makeAuthenticatedRequest<{
       list: { electricQuantity: number; featureValue: string; lockAlias: string; lockId: string; lockMac: string }[];
       pageNo: number;
@@ -880,7 +882,7 @@ export class TTLockApi {
       try {
         const ttlockDevice: TTLockDevice = {} as TTLockDevice;
         ttlockDevice.feature_info = await this.getFeatureInfo(lock.featureValue);
-        ttlockDevice.sys_info = await this.getDeviceDetails(lock.lockId) as SysInfo;
+        ttlockDevice.sys_info = await this.getDeviceDetails(lock.lockId, !skipStateFor.has(String(lock.lockId))) as SysInfo;
         ttlockDevice.sys_info.alias = lock.lockAlias;
         const battery = this.toBatteryLevel(lock.electricQuantity);
         if (battery !== undefined) {
@@ -903,14 +905,14 @@ export class TTLockApi {
     return lockList;
   }
 
-  async getDeviceDetails(lockId: string): Promise<Partial<SysInfo>> {
+  async getDeviceDetails(lockId: string, readState = true): Promise<Partial<SysInfo>> {
     const sysInfo: Partial<SysInfo> = {};
     const detailResponse = await this.makeAuthenticatedRequest<{
       firmwareRevision: string;
       hardwareRevision: string;
       modelNum: string;
     }>('lock/detail', 'GET', { lockId });
-    const stateResponse = await this.queryStateForDiscovery(lockId);
+    const stateResponse = readState ? await this.queryStateForDiscovery(lockId) : undefined;
     if (!detailResponse.firmwareRevision || !detailResponse.hardwareRevision || !detailResponse.modelNum) {
       throw new TTLockApiError(
         `Invalid lock/detail response for lockId=${lockId}`,

@@ -377,9 +377,16 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     this.log.debug('Cleared discoveredDeviceIds set before discovery.');
     try {
       if (this.deviceManager) {
+        // Discovery takes only identity from a lock that is already polled, so it does not read its state: that would
+        // cost an API call and a gateway request that can make another lock's poll find the gateway busy
+        const skipStateFor = new Set(Array.from(this.homekitDevicesById)
+          .filter(([, device]) => !device.ttlockDevice.offline)
+          .map(([deviceId]) => deviceId));
         try {
           const deviceCount = this.getTTLockAccessoryCount();
-          const callsForDiscovery = 1 + (2 * deviceCount);
+          // lock/list, lock/detail and lock/listKeyboardPwd for every lock, and lock/queryOpenState for the locks whose
+          // state discovery reads
+          const callsForDiscovery = 1 + (2 * deviceCount) + Math.max(0, deviceCount - skipStateFor.size);
           if (this.usageTracker) {
             const reserved = await this.usageTracker.beginBatch(callsForDiscovery, 'periodicDiscovery');
             if (!reserved) {
@@ -391,7 +398,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
           this.log.debug('Error reserving budget for periodic discovery', error);
         }
         this.discoveryStartedAt = performance.now();
-        await this.deviceManager.discoverDevices();
+        await this.deviceManager.discoverDevices(skipStateFor);
         discoverySucceeded = true;
       }
     } catch (error) {
