@@ -25,7 +25,7 @@ import {
   lookupCharacteristicNameByUUID,
   satisfiesVersion,
 } from './utils.js';
-import { TTLockApi } from './api/ttlockApi.js';
+import { TTLockApi, TTLockApiError, TTLockApiErrorCategory } from './api/ttlockApi.js';
 import { UsageTracker } from './api/usageTracker.js';
 import { deviceEventEmitter } from './devices/deviceManager.js';
 import type { TTLockAccessCodeConfig } from './config.js';
@@ -54,6 +54,17 @@ export type TTLockAccessCodeAccessoryContext = TTLockAccessoryContext | ManualDo
 
 let packageConfig: PackageConfig;
 
+const TTLOCK_CREDENTIALS = {
+  clientId: 'client ID',
+  clientSecret: 'client secret',
+  username: 'username',
+  password: 'password',
+} as const;
+// Startup retry after TTLock rejected the login or the API budget ran out: trying again sooner cannot succeed,
+// and every login TTLock rejects costs an API call and counts as a failed login on the account
+const STARTUP_RETRY_SLOW_MS = 60 * 60 * 1000;
+const STARTUP_RETRY_MAX_MS = 5 * 60 * 1000;
+
 export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic;
   public readonly configuredAccessories: Map<string, PlatformAccessory<TTLockAccessCodeAccessoryContext>> = new Map();
@@ -72,6 +83,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private discoveryInterval: NodeJS.Timeout | undefined;
   private configInvalid = false;
   private platformInitialization: Promise<void>;
+  // The wait between TTLock API startup attempts; shutdown wakes it
+  private startupRetry: { timer: NodeJS.Timeout; wake: () => void } | undefined;
   private usageTierChangedHandler: (() => void) | undefined;
 
   constructor(public readonly log: Logging, config: PlatformConfig, public readonly api: API) {
@@ -127,6 +140,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       if (!this.isShuttingDown) {
         this.isShuttingDown = true;
       }
+      this.startupRetry?.wake();
       if (this.discoveryInterval) {
         clearInterval(this.discoveryInterval);
         this.log.debug('Cleared periodic device discovery interval');
@@ -214,6 +228,18 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private async didFinishLaunching(): Promise<void> {
     this.log.debug('Finished launching');
 
+    // Checked for emptiness only; the values themselves are sent as they are
+    const missing = (Object.keys(TTLOCK_CREDENTIALS) as (keyof typeof TTLOCK_CREDENTIALS)[])
+      .filter(key => this.config[key].trim().length === 0)
+      .map(key => TTLOCK_CREDENTIALS[key]);
+    if (missing.length > 0) {
+      this.log.error(
+        `TTLock ${missing.join(', ')} not set, so ${PLATFORM_NAME} will not start. ` +
+        'Set them in the plugin settings and restart Homebridge.',
+      );
+      return;
+    }
+
     try {
       const apiStarted = await this.startTTLockApiWithRetry();
       if (!apiStarted) {
@@ -228,6 +254,9 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
       await this.discoverDevices();
       this.log.debug('Device discovery completed');
+      if (this.isShuttingDown) {
+        return;
+      }
 
       const discoveredDeviceIds = new Set<string>();
       this.setupPeriodicDiscovery(discoveredDeviceIds);
@@ -236,26 +265,56 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     }
   }
 
+  // Never gives up for good: TTLock outages and temporary login rejections clear up without a restart
   private async startTTLockApiWithRetry(): Promise<boolean> {
     let attempt = 0;
     while (!this.isShuttingDown) {
       try {
         await this.startTTLockApi();
+        if (this.isShuttingDown) {
+          // Shutdown started during the login and its cleanup has run; stop what this attempt set up
+          await this.stopTTLockApi();
+          return false;
+        }
         if (attempt > 0) {
           this.log.info('TTLock API startup recovered after retries');
         }
         return true;
       } catch (error) {
+        if (this.isShuttingDown) {
+          // startTTLockApi has logged the error; do not wait for a retry that will not run
+          return false;
+        }
         attempt++;
-        const delayMs = Math.min(5 * 60 * 1000, Math.pow(2, Math.min(attempt, 8)) * 1000);
+        const category = error instanceof TTLockApiError ? error.category : undefined;
+        const loginRejected = category === TTLockApiErrorCategory.AuthInvalid;
+        const delayMs = loginRejected || category === TTLockApiErrorCategory.BudgetExhausted
+          ? STARTUP_RETRY_SLOW_MS
+          : Math.min(STARTUP_RETRY_MAX_MS, Math.pow(2, Math.min(attempt, 8)) * 1000);
+        const delay = delayMs === STARTUP_RETRY_SLOW_MS ? '1 h' : `${Math.floor(delayMs / 1000)}s`;
         this.log.error(
-          `TTLock API startup attempt ${attempt} failed; retrying in ${Math.floor(delayMs / 1000)}s: ` +
-          (error instanceof Error ? error.message : String(error)),
+          `TTLock API startup attempt ${attempt} failed; retrying in ${delay}: ` +
+          (error instanceof Error ? error.message : String(error)) +
+          (loginRejected
+            ? '. TTLock rejected the login; check the client ID, client secret, username and password in the plugin settings.'
+            : ''),
         );
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+        await this.sleepUnlessShuttingDown(delayMs);
       }
     }
     return false;
+  }
+
+  private sleepUnlessShuttingDown(ms: number): Promise<void> {
+    return new Promise(resolve => {
+      const wake = () => {
+        clearTimeout(timer);
+        this.startupRetry = undefined;
+        resolve();
+      };
+      const timer = setTimeout(wake, ms);
+      this.startupRetry = { timer, wake };
+    });
   }
 
   private setupPeriodicDiscovery(discoveredDeviceIds: Set<string>): void {
@@ -509,8 +568,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     this.log.debug('Creating and authenticating TTLock API...');
     try {
       this.log.debug('Initializing UsageTracker...');
-      this.usageTracker = new UsageTracker(this.api, this.log, this.config.totalApiCallsPerMonth);
-      await this.usageTracker.init();
+      const usageTracker = new UsageTracker(this.api, this.log, this.config.totalApiCallsPerMonth);
+      await usageTracker.init();
+      // Stored only after init(), which starts an hourly timer: a stopTTLockApi() during init() would drop the
+      // tracker before that timer exists, and nothing would ever clear it
+      this.usageTracker = usageTracker;
       this.log.debug('UsageTracker initialized');
       this.usageTierChangedHandler = () => {
         this.log.info('API usage tier changed - recalculating polling intervals...');
@@ -521,6 +583,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       this.log.error('Failed to initialize usage tracker', err);
       this.usageTracker = undefined;
       this.usageTierChangedHandler = undefined;
+    }
+
+    if (this.isShuttingDown) {
+      // Do not log in during shutdown; startTTLockApiWithRetry stops the tracker
+      return;
     }
 
     this.log.debug('Initializing TTLockApi...');

@@ -283,13 +283,20 @@ export class TTLockApi {
         return;
       }
 
-      try {
-        await this.refreshTokenIfNeededLocked();
-        this.log.debug(`Recovered authentication via refresh token for endpoint ${endpoint}`);
-        return;
-      } catch (refreshError) {
-        const normalizedRefreshError = this.normalizeError(refreshError, endpoint);
-        this.log.warn(`Refresh token flow failed for endpoint ${endpoint}: ${normalizedRefreshError.message}`);
+      if (this.refreshToken) {
+        try {
+          await this.refreshTokenIfNeededLocked();
+          this.log.debug(`Recovered authentication via refresh token for endpoint ${endpoint}`);
+          return;
+        } catch (refreshError) {
+          const normalizedRefreshError = this.normalizeError(refreshError, endpoint);
+          this.log.warn(`Refresh token flow failed for endpoint ${endpoint}: ${normalizedRefreshError.message}`);
+          // Log in with the password only when TTLock turned the refresh token down. After a network or server
+          // error, or with the budget used up, the login would fail the same way and cost another call.
+          if (!normalizedRefreshError.authRelated) {
+            throw normalizedRefreshError;
+          }
+        }
       }
 
       if (!this.authUsername || !this.authPassword) {
@@ -320,8 +327,9 @@ export class TTLockApi {
     let authRecoveryAttempted = false;
     let lastError: TTLockApiError | undefined;
 
-    if (!this.accessToken && this.authUsername && this.authPassword) {
-      await this.authenticateWithPassword(this.authUsername, this.authPassword);
+    // Under the token mutex, so requests that start together before the first login log in only once
+    if (!this.accessToken) {
+      await this.recoverAuthentication(null, endpoint);
     }
     if (!this.accessToken) {
       throw new TTLockApiError(
@@ -335,8 +343,9 @@ export class TTLockApi {
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       // Outside the try: a guard that refuses the request must not be retried
       options.beforeAttempt?.();
-      // Every attempt is a real API call, so every attempt counts against the budget
-      await this.reserveApiCall(endpoint, attempt === 0);
+      // Every attempt is a real API call, so every attempt counts against the budget. The resend after a new
+      // login is not a first attempt, even though it does not use up an attempt.
+      await this.reserveApiCall(endpoint, attempt === 0 && !authRecoveryAttempted);
 
       let attemptedToken: string | null = this.accessToken;
       try {
@@ -393,6 +402,17 @@ export class TTLockApi {
           authRecoveryAttempted = true;
           this.log.warn(`Auth failure for ${endpoint}; attempting internal re-authentication`);
           await this.recoverAuthentication(attemptedToken, endpoint);
+          // The resend with the new token does not use up an attempt, so it happens even after the last one.
+          // Like any retry, it must still be able to finish within the deadline.
+          if (options.deadlineMs !== undefined && Date.now() - startedAt + timeout > options.deadlineMs) {
+            throw new TTLockApiError(
+              `Not sent: the time for ${endpoint} ran out before it could be sent again after logging in`,
+              TTLockApiErrorCategory.DeadlineExpired,
+              false,
+              endpoint,
+            );
+          }
+          attempt--;
           continue;
         }
 
