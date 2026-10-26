@@ -518,11 +518,13 @@ export default abstract class HomeKitDevice {
         case TTLockApiErrorCategory.BudgetExhausted:
         case TTLockApiErrorCategory.AuthExpired:
         case TTLockApiErrorCategory.AuthInvalid:
+        case TTLockApiErrorCategory.DeadlineExpired:
         case TTLockApiErrorCategory.NetworkTransient:
         case TTLockApiErrorCategory.ServerTransient:
         case TTLockApiErrorCategory.RateLimited:
           return false;
         case TTLockApiErrorCategory.ClientInvalidRequest:
+        case TTLockApiErrorCategory.GatewayOffline:
         case TTLockApiErrorCategory.InvalidResponse:
         case TTLockApiErrorCategory.Unknown:
         default:

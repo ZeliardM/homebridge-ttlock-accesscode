@@ -14,6 +14,10 @@ export enum TTLockApiErrorCategory {
   AuthInvalid = 'AuthInvalid',
   BudgetExhausted = 'BudgetExhausted',
   ClientInvalidRequest = 'ClientInvalidRequest',
+  // Not sent: the time allowed for the request ran out before it could be sent
+  DeadlineExpired = 'DeadlineExpired',
+  // The lock's gateway is offline (errcode -3002); sending the request again soon does not help
+  GatewayOffline = 'GatewayOffline',
   InvalidResponse = 'InvalidResponse',
   NetworkTransient = 'NetworkTransient',
   RateLimited = 'RateLimited',
@@ -21,10 +25,56 @@ export enum TTLockApiErrorCategory {
   Unknown = 'Unknown',
 }
 
+// The request never reached TTLock: the host name did not resolve, or the connection was refused or had no route
+const NOT_SENT_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'EHOSTDOWN']);
+const TLS_CODE = /^(CERT_|ERR_TLS_|UNABLE_TO_|SELF_SIGNED_|DEPTH_ZERO_)/;
+
+// How a request that got no answer failed: 'notSent' never reached TTLock, 'noAnswer' may have reached it
+// (timeouts, resets and anything not recognised), 'tls' failed on the certificate and never succeeds on a retry
+export type NetworkFailure = 'notSent' | 'noAnswer' | 'tls';
+
+// Error codes of an error and of everything it wraps. axios keeps the socket error as its cause, and a failed
+// connect to a host with several addresses is an AggregateError with one error per address.
+function errorCodes(error: unknown): string[] {
+  const codes: string[] = [];
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [error];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (typeof current !== 'object' || current === null || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string') {
+      codes.push(code);
+    }
+    queue.push((current as { cause?: unknown }).cause);
+    if (current instanceof AggregateError) {
+      queue.push(...current.errors);
+    }
+  }
+  return codes;
+}
+
+function classifyNetworkFailure(codes: string[]): NetworkFailure {
+  if (codes.some(code => TLS_CODE.test(code))) {
+    return 'tls';
+  }
+  if (codes.length > 0 && codes.every(code => NOT_SENT_CODES.has(code))) {
+    return 'notSent';
+  }
+  return 'noAnswer';
+}
+
 export class TTLockApiError extends Error {
   public wasLogged = false;
   // The gateway was busy or could not reach the lock; the request is safe to send again
   public gatewayTransient = false;
+  // Set when the request got no answer from TTLock
+  public networkFailure?: NetworkFailure;
+  // How long TTLock asked to wait before trying again (Retry-After on HTTP 429)
+  public retryAfterMs?: number;
   // Only the code of the underlying error is kept. An axios error holds the request it failed on, which carries
   // the client secret, the password hash or the access token, and a logged error must never print those.
   public readonly causeCode: string | undefined;
@@ -40,7 +90,7 @@ export class TTLockApiError extends Error {
   ) {
     super(message);
     this.name = 'TTLockApiError';
-    this.causeCode = axios.isAxiosError(cause) ? (cause.code ?? 'AxiosError') : cause instanceof Error ? cause.name : undefined;
+    this.causeCode = errorCodes(cause)[0] ?? (cause instanceof Error ? cause.name : undefined);
   }
 
   public get authRelated(): boolean {
@@ -95,10 +145,16 @@ export class TTLockApi {
   // These endpoints reach the lock through its gateway over Bluetooth and can take 15s+
   private readonly gatewayRequestTimeoutMs = 25000;
   private readonly maxRetries = 3;
+  // A request that TTLock asks to wait longer than this before retrying is not retried: the wait would hold up
+  // the lock's other requests. The next poll or discovery tries again.
+  private readonly maxRetryDelayMs = 10000;
   // A lock command is not retried unless the retry could finish within this long of the first attempt,
   // so a lock never moves long after it was asked to
   private readonly lockCommandDeadlineMs = 45000;
   private static readonly gatewayEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
+  // Error codes TTLock returns for a rejected or expired token and for too many requests
+  private static readonly authErrcodes = [10002, 10003, 10004, 10005, 10006];
+  private static readonly rateLimitErrcodes = [10018, 10019, 10020];
 
   constructor(private log: Logging, private clientId: string, private clientSecret: string, usageTracker?: UsageTracker) {
     this.apiClient = axios.create({
@@ -332,10 +388,10 @@ export class TTLockApi {
 
         const isLastAttempt = attempt >= this.maxRetries;
         const retryable = normalized.retryable || (normalized.gatewayTransient && options.retryGatewayErrors === true);
-        const delay = this.getRetryDelayMs(attempt);
+        const delay = Math.max(this.getRetryDelayMs(attempt), normalized.retryAfterMs ?? 0);
         const pastDeadline = options.deadlineMs !== undefined &&
           Date.now() - startedAt + delay + timeout > options.deadlineMs;
-        if (!isLastAttempt && retryable && !pastDeadline) {
+        if (!isLastAttempt && retryable && !pastDeadline && delay <= this.maxRetryDelayMs) {
           this.log.warn(
             `Retryable TTLock API error on ${endpoint}; category=${normalized.category}; ` +
             `attempt=${attempt + 1}/${this.maxRetries + 1}; retrying in ${delay}ms`,
@@ -396,19 +452,38 @@ export class TTLockApi {
       return;
     }
 
+    const network = error.networkFailure ? ` network=${error.networkFailure} code=${error.causeCode ?? 'n/a'}` : '';
     this.log.error(
       `${message}: category=${error.category} retryable=${error.retryable} endpoint=${error.endpoint ?? 'unknown'} ` +
-      `status=${error.statusCode ?? 'n/a'} errcode=${error.errcode ?? 'n/a'} message=${error.message}`,
+      `status=${error.statusCode ?? 'n/a'} errcode=${error.errcode ?? 'n/a'}${network} message=${error.message}`,
     );
   }
 
   private isGatewayOfflineError(error: TTLockApiError): boolean {
-    return error.errcode === -3002 || /gateway is offline/i.test(error.message);
+    return error.category === TTLockApiErrorCategory.GatewayOffline;
   }
 
+  // Known error codes decide first; the message text is only a fallback for codes not handled here
   private normalizeApiResponseError(payload: ApiErrorPayload, endpoint: string): TTLockApiError {
     const errcode = payload.errcode;
     const errmsg = payload.errmsg ?? 'Unknown API error';
+    if (errcode === -3002) {
+      return this.gatewayOfflineError(errmsg, endpoint, errcode);
+    }
+    // -3003: the gateway is busy. errcode 1 ("failed or means no") on a gateway endpoint: the gateway could not
+    // reach the lock this time. Gateway endpoints are reads or idempotent lock/unlock, so sending them again is safe.
+    if (errcode === -3003 || (errcode === 1 && TTLockApi.gatewayEndpoints.includes(endpoint))) {
+      const error = new TTLockApiError(
+        errcode === -3003 ? `TTLock gateway busy: ${errmsg}` : `TTLock gateway could not reach the lock: ${errmsg}`,
+        TTLockApiErrorCategory.ServerTransient,
+        false,
+        endpoint,
+        undefined,
+        errcode,
+      );
+      error.gatewayTransient = true;
+      return error;
+    }
     if (this.looksAuthError(undefined, errcode, errmsg)) {
       return new TTLockApiError(
         `TTLock authentication error: ${errmsg}`,
@@ -429,23 +504,24 @@ export class TTLockApi {
         errcode,
       );
     }
-    // -3003: the gateway is busy. errcode 1 ("failed or means no") on a gateway endpoint: the gateway could not
-    // reach the lock this time. Gateway endpoints are reads or idempotent lock/unlock, so sending them again is safe.
-    if (errcode === -3003 || (errcode === 1 && TTLockApi.gatewayEndpoints.includes(endpoint))) {
-      const error = new TTLockApiError(
-        errcode === -3003 ? `TTLock gateway busy: ${errmsg}` : `TTLock gateway could not reach the lock: ${errmsg}`,
-        TTLockApiErrorCategory.ServerTransient,
-        false,
-        endpoint,
-        undefined,
-        errcode,
-      );
-      error.gatewayTransient = true;
-      return error;
+    if (/gateway is offline/i.test(errmsg)) {
+      return this.gatewayOfflineError(errmsg, endpoint, errcode);
     }
     return new TTLockApiError(
       `TTLock API returned errcode=${errcode ?? 'n/a'} errmsg=${errmsg}`,
       TTLockApiErrorCategory.ClientInvalidRequest,
+      false,
+      endpoint,
+      undefined,
+      errcode,
+    );
+  }
+
+  // Not gatewayTransient: retrying within a lock command's time limit does not bring a gateway back
+  private gatewayOfflineError(errmsg: string, endpoint: string, errcode: number | undefined): TTLockApiError {
+    return new TTLockApiError(
+      `TTLock gateway offline: ${errmsg}`,
+      TTLockApiErrorCategory.GatewayOffline,
       false,
       endpoint,
       undefined,
@@ -477,8 +553,10 @@ export class TTLockApi {
       }
 
       if (this.looksRateLimitError(status, errcode, errmsg)) {
-        return new TTLockApiError(
-          `Rate limited on ${endpoint ?? 'request'}: ${errmsg ?? error.message}`,
+        const retryAfterMs = status === 429 ? this.parseRetryAfterMs(error.response?.headers?.['retry-after']) : undefined;
+        const rateLimited = new TTLockApiError(
+          `Rate limited on ${endpoint ?? 'request'}: ${errmsg ?? error.message}` +
+          (retryAfterMs !== undefined ? ` (TTLock asked to wait ${Math.ceil(retryAfterMs / 1000)}s)` : ''),
           TTLockApiErrorCategory.RateLimited,
           true,
           endpoint,
@@ -486,18 +564,35 @@ export class TTLockApi {
           errcode,
           error,
         );
+        if (retryAfterMs !== undefined) {
+          rateLimited.retryAfterMs = retryAfterMs;
+        }
+        return rateLimited;
       }
 
       if (!error.response || error.code === 'ECONNABORTED') {
-        return new TTLockApiError(
-          `Network error on ${endpoint ?? 'request'}: ${error.message}`,
-          TTLockApiErrorCategory.NetworkTransient,
-          true,
-          endpoint,
-          status,
-          errcode,
-          error,
-        );
+        const networkFailure = classifyNetworkFailure(errorCodes(error));
+        const networkError = networkFailure === 'tls'
+          ? new TTLockApiError(
+            `TLS error on ${endpoint ?? 'request'}: ${error.message} (check the system clock and CA certificates)`,
+            TTLockApiErrorCategory.NetworkTransient,
+            false,
+            endpoint,
+            status,
+            errcode,
+            error,
+          )
+          : new TTLockApiError(
+            `Network error on ${endpoint ?? 'request'}: ${error.message}`,
+            TTLockApiErrorCategory.NetworkTransient,
+            true,
+            endpoint,
+            status,
+            errcode,
+            error,
+          );
+        networkError.networkFailure = networkFailure;
+        return networkError;
       }
 
       if (status !== undefined && status >= 500) {
@@ -563,20 +658,37 @@ export class TTLockApi {
     if (status === 401 || status === 403) {
       return true;
     }
-    if (typeof errcode === 'number' && [10002, 10003, 10004, 10005, 10006].includes(errcode)) {
+    if (typeof errcode === 'number' && TTLockApi.authErrcodes.includes(errcode)) {
       return true;
     }
-    return /token|auth|expired|invalid_grant|credential|login/i.test(message ?? '');
+    // Only wording that names a token problem. Words like 'auth', 'login' or 'expired' also appear in lock and
+    // passcode errors, and treating those as auth errors costs a token refresh, a login and a retry each time.
+    return /invalid.?token|token.*(expired|invalid)|invalid_grant|access.?token/i.test(message ?? '');
   }
 
   private looksRateLimitError(status?: number, errcode?: number, message?: string): boolean {
     if (status === 429) {
       return true;
     }
-    if (typeof errcode === 'number' && [10018, 10019, 10020].includes(errcode)) {
+    if (typeof errcode === 'number' && TTLockApi.rateLimitErrcodes.includes(errcode)) {
       return true;
     }
-    return /too many|rate.?limit|frequency|limit/i.test(message ?? '');
+    // Not a bare 'limit', which also appears in other errors (for example a limit on passcodes); rate limited
+    // requests are retried, and a passcode add must not be sent again for that
+    return /too many requests|rate.?limit|too frequent/i.test(message ?? '');
+  }
+
+  // Retry-After is a number of seconds or an HTTP date
+  private parseRetryAfterMs(value: unknown): number | undefined {
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      return undefined;
+    }
+    const text = String(value).trim();
+    if (/^\d+(\.\d+)?$/.test(text)) {
+      return Math.round(Number(text) * 1000);
+    }
+    const date = Date.parse(text);
+    return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
   }
 
   private getRetryDelayMs(attempt: number): number {
@@ -704,7 +816,9 @@ export class TTLockApi {
     } catch (error) {
       const temporary = error instanceof TTLockApiError && (
         error.gatewayTransient ||
+        error.category === TTLockApiErrorCategory.GatewayOffline ||
         error.category === TTLockApiErrorCategory.NetworkTransient ||
+        error.category === TTLockApiErrorCategory.RateLimited ||
         error.category === TTLockApiErrorCategory.ServerTransient
       );
       if (!temporary) {
