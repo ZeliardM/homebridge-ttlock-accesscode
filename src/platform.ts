@@ -412,7 +412,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         if (comingOnline) {
           this.log.debug(`Device [${device.sys_info.device_id}] was offline and is now online. Updating and starting polling.`);
           existingDevice.updateAfterPeriodicDiscovery(true);
-          existingDevice.startPolling();
+          await existingDevice.startPolling();
         } else {
           this.log.debug(`Updating existing HomeKit device [${device.sys_info.device_id}].`);
           existingDevice.updateAfterPeriodicDiscovery();

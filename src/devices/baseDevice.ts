@@ -152,7 +152,9 @@ export default abstract class HomeKitDevice {
 
   protected async withLock<T>(key: string, action: () => Promise<T>): Promise<T> {
     const previousPromise = HomeKitDevice.locks.get(key) ?? Promise.resolve();
-    const currentPromise = previousPromise.then(async () => {
+    // Wait for the previous holder to settle either way. Its error belongs to its own caller;
+    // chaining with a plain then() would hand it to every later caller and never free the key.
+    const currentPromise = previousPromise.catch(() => undefined).then(async () => {
       try {
         return await action();
       } finally {
@@ -271,9 +273,9 @@ export default abstract class HomeKitDevice {
     this.log.debug(`Starting polling with interval ${effectiveInterval}ms, first poll in ${firstPollDelay}ms`);
     this.pollingStartTimer = setTimeout(() => {
       this.pollingStartTimer = undefined;
-      void this.refreshAndUpdateCharacteristics(false);
+      void this.refreshInBackground(false);
       this.pollingInterval = setInterval(
-        () => void this.refreshAndUpdateCharacteristics(false),
+        () => void this.refreshInBackground(false),
         effectiveInterval,
       );
     }, firstPollDelay);
@@ -310,7 +312,16 @@ export default abstract class HomeKitDevice {
   }
 
   public updateAfterPeriodicDiscovery(force = false): void {
-    void this.refreshAndUpdateCharacteristics(force, true);
+    void this.refreshInBackground(force, true);
+  }
+
+  // Nothing awaits these refreshes, and an unhandled rejection makes Homebridge shut down.
+  private async refreshInBackground(forceUpdate: boolean, skipFetch = false): Promise<void> {
+    try {
+      await this.refreshAndUpdateCharacteristics(forceUpdate, skipFetch);
+    } catch (error) {
+      this.log.error('Background refresh failed:', error);
+    }
   }
 
   protected setupServices(): void {
