@@ -127,12 +127,14 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       if (this.configInvalid) {
         return;
       }
-      await this.didFinishLaunching();
+      // Before startup, which can wait a long time for TTLock: if the initial discovery finds one of these locks
+      // again, it registers a new accessory with the same UUID, which Homebridge refuses while the old one is there
       if (this.offlineAccessories.size > 0) {
         this.log.debug('Unregistering offline accessories');
         this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, Array.from(this.offlineAccessories.values()));
         this.offlineAccessories.clear();
       }
+      await this.didFinishLaunching();
     });
 
     this.api.on('shutdown', async () => {
