@@ -103,6 +103,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   // The wait between TTLock API startup attempts; shutdown wakes it
   private startupRetry: { timer: NodeJS.Timeout; wake: () => void } | undefined;
   private usageTierChangedHandler: (() => void) | undefined;
+  private usageMonthStartedHandler: (() => void) | undefined;
 
   constructor(public readonly log: Logging, config: PlatformConfig, public readonly api: API) {
     this.Service = this.api.hap.Service;
@@ -667,6 +668,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.usageTracker.off('tierChanged', this.usageTierChangedHandler);
         this.usageTierChangedHandler = undefined;
       }
+      if (this.usageMonthStartedHandler) {
+        this.usageTracker.off('monthStarted', this.usageMonthStartedHandler);
+        this.usageMonthStartedHandler = undefined;
+      }
       await this.usageTracker.stop();
       this.usageTracker = undefined;
     }
@@ -695,10 +700,17 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         void this.reschedulePolling();
       };
       this.usageTracker.on('tierChanged', this.usageTierChangedHandler);
+      // The interval was paced from last month's budget
+      this.usageMonthStartedHandler = () => {
+        this.log.debug('New API usage month - recalculating polling intervals');
+        void this.reschedulePolling();
+      };
+      this.usageTracker.on('monthStarted', this.usageMonthStartedHandler);
     } catch (err) {
       this.log.error('Failed to initialize usage tracker', err);
       this.usageTracker = undefined;
       this.usageTierChangedHandler = undefined;
+      this.usageMonthStartedHandler = undefined;
     }
 
     if (this.isShuttingDown) {

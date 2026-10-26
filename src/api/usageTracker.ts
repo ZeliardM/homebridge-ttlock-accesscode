@@ -14,6 +14,24 @@ type StoredUsage = {
   lastUpdatedISO?: string;
 };
 
+// What a usage file must hold to be used; totalAllowed always comes from the config
+function isStoredUsage(value: unknown): value is Pick<StoredUsage, 'year' | 'month' | 'used'> {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const { year, month, used } = value as Record<string, unknown>;
+  return Number.isInteger(year) && Number.isInteger(month) && (month as number) >= 1 && (month as number) <= 12 &&
+    typeof used === 'number' && Number.isFinite(used) && used >= 0;
+}
+
+function daysInMonthOf(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class UsageTracker extends EventEmitter {
   private storageFilePath?: string;
   private state: StoredUsage | null = null;
@@ -23,6 +41,8 @@ export class UsageTracker extends EventEmitter {
   private rolloverInterval?: NodeJS.Timeout;
   private currentTier = 0;
   private pendingReserved = 0;
+  // Every call saves the usage, so a failing save is logged once until it works again
+  private persistFailing = false;
 
   constructor(api: API, log: Logging, private totalAllowed: number) {
     super();
@@ -33,57 +53,87 @@ export class UsageTracker extends EventEmitter {
   public async init(): Promise<void> {
     const base = this.api.user.storagePath();
     const dir = path.join(base, 'ttlock-accesscode');
-    await fs.mkdir(dir, { recursive: true });
-    this.storageFilePath = path.join(dir, 'ttlock-accesscode-usage.json');
-    this.log.debug(`UsageTracker storage path: ${this.storageFilePath}`);
+    const storageFilePath = path.join(dir, 'ttlock-accesscode-usage.json');
+    this.log.debug(`UsageTracker storage path: ${storageFilePath}`);
+    try {
+      await fs.mkdir(dir, { recursive: true });
+      this.storageFilePath = storageFilePath;
+    } catch (err) {
+      // Usage is then counted in memory only, starting from an estimate
+      this.log.error(`Could not create the folder for the API usage file ${dir}: ${errorText(err)}`);
+    }
 
     await this.loadOrInit();
     this.scheduleRolloverCheck();
   }
 
+  // A usage file that cannot be read or does not hold valid usage must neither turn the budget off nor start the
+  // month again at 0: usage then starts from what an evenly used month would have used by today.
   private async loadOrInit(): Promise<void> {
-    try {
-      const data = await fs.readFile(this.storageFilePath!, 'utf8');
-      const parsed = JSON.parse(data) as StoredUsage;
-      const now = new Date();
-      if (parsed.year !== now.getFullYear() || parsed.month !== now.getMonth() + 1) {
-        this.log.debug('Usage file month mismatch, resetting usage for new month');
-        this.state = {
-          year: now.getFullYear(),
-          month: now.getMonth() + 1,
-          totalAllowed: this.totalAllowed,
-          used: 0,
-          lastUpdatedISO: now.toISOString(),
-        };
-        await this.persist();
-      } else {
-        if (parsed.totalAllowed !== this.totalAllowed) {
-          this.log.debug('Updating stored totalAllowed to current config value');
-          parsed.totalAllowed = this.totalAllowed;
-        }
-        parsed.lastUpdatedISO = new Date().toISOString();
-        this.state = parsed;
-        await this.persist();
-      }
-    } catch (err) {
-      const errorCode = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (errorCode === 'ENOENT') {
-        this.log.debug('Usage file not found, initializing new usage state');
-        const now = new Date();
-        this.state = {
-          year: now.getFullYear(),
-          month: now.getMonth() + 1,
-          totalAllowed: this.totalAllowed,
-          used: 0,
-          lastUpdatedISO: now.toISOString(),
-        };
-        await this.persist();
-        return;
-      }
-
-      this.log.error('Failed to load usage data; refusing to reset usage state automatically', err);
-      throw err;
+    const now = new Date();
+    const stored = this.storageFilePath ? await this.readStoredUsage(this.storageFilePath) : undefined;
+    if (stored === null) {
+      this.log.debug('Usage file not found, initializing new usage state');
+      this.state = this.newMonthState(now, 0);
+    } else if (stored === undefined) {
+      const used = Math.ceil(this.totalAllowed * (now.getDate() - 1) / daysInMonthOf(now));
+      this.log.warn(`Counting API usage from an estimate of ${used} of ${this.totalAllowed} calls used so far this month`);
+      this.state = this.newMonthState(now, used);
+    } else if (this.isNewMonth(stored, now)) {
+      this.log.debug('Usage file month mismatch, resetting usage for new month');
+      this.state = this.newMonthState(now, 0);
+    } else {
+      this.state = this.newMonthState(now, stored.used);
     }
+    await this.persist();
+    // Starting from 0 instead would report a tier change at the first call after every restart
+    this.currentTier = this.computeTier();
+  }
+
+  // The stored usage; null when there is no usage file yet, undefined when it cannot be read or does not hold valid
+  // usage. Such a file is moved aside: it stays there to look at, and the next save starts a new one.
+  private async readStoredUsage(filePath: string): Promise<Pick<StoredUsage, 'year' | 'month' | 'used'> | null | undefined> {
+    let data: string;
+    try {
+      data = await fs.readFile(filePath, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+        return null;
+      }
+      this.log.error(`Could not read the API usage file ${filePath}: ${errorText(err)}`);
+      return undefined;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      parsed = undefined;
+    }
+    if (isStoredUsage(parsed)) {
+      return parsed;
+    }
+    const asidePath = `${filePath}.corrupt-${Date.now()}`;
+    try {
+      await fs.rename(filePath, asidePath);
+      this.log.error(`The API usage file ${filePath} does not hold valid usage; moved it to ${asidePath}`);
+    } catch (err) {
+      this.log.error(`The API usage file ${filePath} does not hold valid usage and could not be moved aside: ${errorText(err)}`);
+    }
+    return undefined;
+  }
+
+  private newMonthState(now: Date, used: number): StoredUsage {
+    return {
+      year: now.getFullYear(),
+      month: now.getMonth() + 1,
+      totalAllowed: this.totalAllowed,
+      used,
+      lastUpdatedISO: now.toISOString(),
+    };
+  }
+
+  private isNewMonth(usage: Pick<StoredUsage, 'year' | 'month'>, now: Date): boolean {
+    return usage.year !== now.getFullYear() || usage.month !== now.getMonth() + 1;
   }
 
   private async persist(): Promise<void> {
@@ -94,8 +144,17 @@ export class UsageTracker extends EventEmitter {
     try {
       await fs.writeFile(tempPath, JSON.stringify(this.state), 'utf8');
       await fs.rename(tempPath, this.storageFilePath);
+      if (this.persistFailing) {
+        this.persistFailing = false;
+        this.log.info('Saving API usage data works again');
+      }
     } catch (err) {
-      this.log.error('Failed to persist usage data', err);
+      if (this.persistFailing) {
+        this.log.debug(`Failed to persist usage data: ${errorText(err)}`);
+      } else {
+        this.persistFailing = true;
+        this.log.error(`Failed to persist usage data; it is still counted while Homebridge runs: ${errorText(err)}`);
+      }
     }
   }
 
@@ -103,15 +162,19 @@ export class UsageTracker extends EventEmitter {
     if (!this.state) {
       throw new Error('UsageTracker not initialized');
     }
-    const remaining = Math.max(0, this.state.totalAllowed - this.state.used);
     const now = new Date();
-    const daysInMonth = new Date(this.state.year, this.state.month, 0).getDate();
+    // Until the first call of a new month starts its budget, report that budget rather than last month's
+    const newMonth = this.isNewMonth(this.state, now);
+    const used = newMonth ? 0 : this.state.used;
+    const totalAllowed = newMonth ? this.totalAllowed : this.state.totalAllowed;
+    const remaining = Math.max(0, totalAllowed - used);
+    const daysInMonth = daysInMonthOf(now);
     const currentDay = now.getDate();
     const daysRemaining = Math.max(1, daysInMonth - (currentDay - 1));
     const remainingDailyAllowance = daysRemaining > 0 ? Math.floor(remaining / daysRemaining) : 0;
     return {
-      used: this.state.used,
-      totalAllowed: this.state.totalAllowed,
+      used,
+      totalAllowed,
       daysInMonth,
       remaining,
       daysRemaining,
@@ -126,19 +189,14 @@ export class UsageTracker extends EventEmitter {
     }
     const release = await this.mutex.acquire();
     try {
+      await this.rolloverIfNeededLocked();
       this.state.used += n;
       this.state.lastUpdatedISO = new Date().toISOString();
       await this.persist();
       if (reason) {
         this.log.debug(`Usage incremented by ${n} (${reason}). New used=${this.state.used}`);
       }
-      const newTier = this.computeTier();
-      if (newTier !== this.currentTier) {
-        const old = this.currentTier;
-        this.currentTier = newTier;
-        this.emit('tierChanged', { old, new: newTier, usage: this.getUsage() });
-        this.log.info(`Usage tier changed: ${old} -> ${newTier}`);
-      }
+      this.updateTier();
     } finally {
       release();
     }
@@ -150,6 +208,7 @@ export class UsageTracker extends EventEmitter {
     }
     const release = await this.mutex.acquire();
     try {
+      await this.rolloverIfNeededLocked();
       const remaining = this.state.totalAllowed - this.state.used;
       if (remaining >= n) {
         this.state.used += n;
@@ -158,12 +217,7 @@ export class UsageTracker extends EventEmitter {
         if (reason) {
           this.log.debug(`Reserved ${n} calls (${reason}). New used=${this.state.used}`);
         }
-        const newTier = this.computeTier();
-        if (newTier !== this.currentTier) {
-          const old = this.currentTier;
-          this.currentTier = newTier;
-          this.emit('tierChanged', { old, new: newTier, usage: this.getUsage() });
-        }
+        this.updateTier();
         return true;
       }
       this.log.debug('Not enough calls remaining, returning false');
@@ -179,6 +233,7 @@ export class UsageTracker extends EventEmitter {
     }
     const release = await this.mutex.acquire();
     try {
+      await this.rolloverIfNeededLocked();
       const remaining = this.state.totalAllowed - this.state.used;
       if (remaining >= n) {
         this.state.used += n;
@@ -188,13 +243,7 @@ export class UsageTracker extends EventEmitter {
         if (reason) {
           this.log.debug(`Reserve ${n} calls (${reason}). New used=${this.state.used}`);
         }
-        const newTier = this.computeTier();
-        if (newTier !== this.currentTier) {
-          const old = this.currentTier;
-          this.currentTier = newTier;
-          this.emit('tierChanged', { old, new: newTier, usage: this.getUsage() });
-          this.log.info(`Usage tier changed: ${old} -> ${newTier}`);
-        }
+        this.updateTier();
         return true;
       }
       return false;
@@ -206,6 +255,8 @@ export class UsageTracker extends EventEmitter {
   public async consumePendingReservation(n = 1): Promise<boolean> {
     const release = await this.mutex.acquire();
     try {
+      // A new month drops last month's reservations, so this call is counted in the new month
+      await this.rolloverIfNeededLocked();
       if (this.pendingReserved >= n) {
         this.pendingReserved -= n;
         return true;
@@ -213,6 +264,31 @@ export class UsageTracker extends EventEmitter {
       return false;
     } finally {
       release();
+    }
+  }
+
+  // The month's budget starts at its first call, not at the next hourly check: until then, calls would count against
+  // (and be refused by) last month's budget. Discovery reservations left from last month go with it.
+  private async rolloverIfNeededLocked(now = new Date()): Promise<void> {
+    if (!this.state || !this.isNewMonth(this.state, now)) {
+      return;
+    }
+    this.state = this.newMonthState(now, 0);
+    this.pendingReserved = 0;
+    await this.persist();
+    this.currentTier = this.computeTier();
+    this.log.info(`New month: API usage starts again at 0 of ${this.state.totalAllowed} calls`);
+    // Polling is paced from the budget left, so the platform recalculates it
+    this.emit('monthStarted', { usage: this.getUsage() });
+  }
+
+  private updateTier(): void {
+    const newTier = this.computeTier();
+    if (newTier !== this.currentTier) {
+      const old = this.currentTier;
+      this.currentTier = newTier;
+      this.log.debug(`Usage tier changed: ${old} -> ${newTier}`);
+      this.emit('tierChanged', { old, new: newTier, usage: this.getUsage() });
     }
   }
 
@@ -245,37 +321,21 @@ export class UsageTracker extends EventEmitter {
     return remaining >= n;
   }
 
-  public async resetForNewMonth(): Promise<void> {
-    if (!this.state) {
-      throw new Error('UsageTracker not initialized');
-    }
-    const release = await this.mutex.acquire();
-    try {
-      const now = new Date();
-      this.state.year = now.getFullYear();
-      this.state.month = now.getMonth() + 1;
-      this.state.used = 0;
-      this.state.totalAllowed = this.totalAllowed;
-      this.state.lastUpdatedISO = now.toISOString();
-      await this.persist();
-      this.log.info('UsageTracker: month reset performed');
-    } finally {
-      release();
-    }
-  }
-
+  // A backstop for a month without calls; the month also starts at its first call
   private scheduleRolloverCheck(): void {
     this.rolloverInterval = setInterval(() => void this.checkRollover(), 60 * 60 * 1000);
+    this.rolloverInterval.unref();
   }
 
   private async checkRollover(): Promise<void> {
     if (!this.state) {
       return;
     }
-    const now = new Date();
-    if (now.getFullYear() !== this.state.year || (now.getMonth() + 1) !== this.state.month) {
-      this.log.info('Detected month change - performing usage reset');
-      await this.resetForNewMonth();
+    const release = await this.mutex.acquire();
+    try {
+      await this.rolloverIfNeededLocked();
+    } finally {
+      release();
     }
   }
 
