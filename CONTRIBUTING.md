@@ -23,7 +23,7 @@ Thank you for contributing to homebridge-ttlock-accesscode!
    ```bash
    node -e "import('./dist/index.js').then(()=>console.log('Node OK'))"
    ```
-5. Label appropriately: enhancement, fix, breaking-change, docs, dependency.
+5. Name the branch for the change, so the PR gets the right labels (see Labels).
 6. One logical change per PR.
 
 ## Release Flow (Simplified)
@@ -46,10 +46,14 @@ Thank you for contributing to homebridge-ttlock-accesscode!
 - Stable body omits “-beta.N”.
 
 ## Labels
-- breaking-change
-- enhancement / feature
-- fix / bug
-- docs / dependency
+Labels pick the CHANGELOG section and the version bump. When a PR is opened and on every push to it, the PR workflow clears its labels and sets them again from the branch name and the changed files, so labels added by hand do not last:
+- `feat/...` or `feature/...` -> enhancement (minor version)
+- `fix/...` or `hotfix/...` -> fix (patch)
+- `bug/...` -> bug (patch)
+- a branch name containing `breaking` -> breaking-change (major); the PR body then needs the breaking change explanation from the PR template.
+- Changed files add docs (`*.md`), dependency (`package.json`, `package-lock.json`) and workflow (`.github/`).
+
+A PR needs at least one of these labels to pass validation. Changing `src/` alone adds no label, so use a branch prefix.
 
 ## Security / Quality
 - CodeQL runs on PRs.
