@@ -77,6 +77,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   public taskQueue: TaskQueue;
   private readonly homekitDevicesById: Map<string, HomeKitDevice> = new Map();
   private deviceDiscoveredHandler: ((device: TTLockDevice) => Promise<void>) | undefined;
+  // performance.now() when the running or last discovery started
+  private discoveryStartedAt = 0;
   private discoveryInterval: NodeJS.Timeout | undefined;
   private configInvalid = false;
   private platformInitialization: Promise<void>;
@@ -351,6 +353,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         } catch (error) {
           this.log.debug('Error reserving budget for initial discovery', error);
         }
+        this.discoveryStartedAt = performance.now();
         await this.deviceManager.discoverDevices();
       }
     } catch (error) {
@@ -387,6 +390,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         } catch (error) {
           this.log.debug('Error reserving budget for periodic discovery', error);
         }
+        this.discoveryStartedAt = performance.now();
         await this.deviceManager.discoverDevices();
         discoverySucceeded = true;
       }
@@ -476,26 +480,17 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     this.updateAccessoryStatus(accessory, now, false);
     const existingDevice = this.homekitDevicesById.get(device.sys_info.device_id);
     if (existingDevice) {
-      if (!existingDevice.isUpdating) {
-        const comingOnline = existingDevice.ttlockDevice.offline && !device.offline;
-        if (device.sys_info.state === undefined) {
-          // Discovery could not read the state this time; keep the last known one
-          device.sys_info.state = existingDevice.ttlockDevice.sys_info.state;
-        }
-        existingDevice.ttlockDevice.sys_info = device.sys_info;
-        existingDevice.ttlockDevice.feature_info = device.feature_info;
-        existingDevice.ttlockDevice.last_seen = device.last_seen;
-        existingDevice.ttlockDevice.offline = device.offline;
-        if (comingOnline) {
-          this.log.debug(`Device [${device.sys_info.device_id}] was offline and is now online. Updating and starting polling.`);
-          existingDevice.updateAfterPeriodicDiscovery(true);
-          await existingDevice.startPolling();
-        } else {
-          this.log.debug(`Updating existing HomeKit device [${device.sys_info.device_id}].`);
-          existingDevice.updateAfterPeriodicDiscovery();
-        }
+      // Discovery only refreshes identity, so it applies even while a poll or lock command is in flight
+      existingDevice.updateFromDiscovery(device, this.discoveryStartedAt);
+      if (existingDevice.ttlockDevice.offline) {
+        // Its polling stopped when it went offline: read it now and poll it again
+        this.log.debug(`Device [${device.sys_info.device_id}] was offline and is now online. Reading it and starting polling.`);
+        existingDevice.ttlockDevice.offline = false;
+        existingDevice.updateAfterPeriodicDiscovery();
+        await existingDevice.startPolling();
       } else {
-        this.log.debug(`HomeKit device [${device.sys_info.device_id}] is currently updating. Skipping update.`);
+        // Its own polling keeps the state current; discovery only refreshed its identity
+        this.log.debug(`Updated existing HomeKit device [${device.sys_info.device_id}] from discovery.`);
       }
     } else {
       await this.addNewDevice(device);

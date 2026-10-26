@@ -41,6 +41,8 @@ export default abstract class HomeKitDevice {
   private static locks: Map<string, Promise<unknown>> = new Map();
   private pendingChanges: Map<string, { pendingValue: CharacteristicValue; count: number }> = new Map();
   private removedFromPlatform = false;
+  // performance.now() when this lock's last HomeKit write started or ended
+  private lastWriteAt = 0;
 
   protected getSysInfoDeferred: () => Promise<void>;
 
@@ -189,7 +191,7 @@ export default abstract class HomeKitDevice {
     this.log.debug(`Updated sys_info: ${updatedSysInfo.alias ?? deviceId}`);
   }
 
-  protected async refreshAndUpdateCharacteristics(forceUpdate: boolean, skipFetch = false): Promise<void> {
+  protected async refreshAndUpdateCharacteristics(forceUpdate: boolean): Promise<void> {
     const deviceKey = this.ttlockDevice.sys_info.device_id;
     if (!forceUpdate && HomeKitDevice.locks.has(deviceKey)) {
       this.log.debug('Skipping poll; active update lock');
@@ -202,9 +204,7 @@ export default abstract class HomeKitDevice {
       }
       this.isUpdating = true;
       try {
-        if (!skipFetch) {
-          await this.getSysInfo();
-        }
+        await this.getSysInfo();
         await this.updateAllServicesAndCharacteristics(forceUpdate);
         this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
         this.consecutivePollFailures = 0;
@@ -290,14 +290,33 @@ export default abstract class HomeKitDevice {
     this.updateEmitter.emit('updateComplete');
   }
 
-  public updateAfterPeriodicDiscovery(force = false): void {
-    void this.refreshInBackground(force, true);
+  // Discovery reads every lock before it reports any of them, so the state, battery and passcodes it read can be
+  // older than the last poll or HomeKit write. Take only identity from it; polls keep the state current.
+  // Updated in place: polls, write contexts and in-flight writes hold this sys_info object.
+  public updateFromDiscovery(device: TTLockDevice, discoveryStartedAt: number): void {
+    const sysInfo = this.ttlockDevice.sys_info;
+    sysInfo.alias = device.sys_info.alias;
+    sysInfo.mac = device.sys_info.mac;
+    sysInfo.model = device.sys_info.model;
+    sysInfo.hw_ver = device.sys_info.hw_ver;
+    sysInfo.fw_ver = device.sys_info.fw_ver;
+    this.ttlockDevice.feature_info = device.feature_info;
+    this.ttlockDevice.last_seen = device.last_seen;
+    // Picks up codes changed in the TTLock app, unless HomeKit changed codes after discovery read them
+    if (Array.isArray(device.sys_info.passcodes) && !this.isUpdating && this.lastWriteAt < discoveryStartedAt) {
+      sysInfo.passcodes = device.sys_info.passcodes;
+    }
+  }
+
+  // Discovery found a lock that was offline: read it now instead of at the next poll
+  public updateAfterPeriodicDiscovery(): void {
+    void this.refreshInBackground(true);
   }
 
   // Nothing awaits these refreshes, and an unhandled rejection makes Homebridge shut down.
-  private async refreshInBackground(forceUpdate: boolean, skipFetch = false): Promise<void> {
+  private async refreshInBackground(forceUpdate: boolean): Promise<void> {
     try {
-      await this.refreshAndUpdateCharacteristics(forceUpdate, skipFetch);
+      await this.refreshAndUpdateCharacteristics(forceUpdate);
     } catch (error) {
       this.log.error('Background refresh failed:', error);
     }
@@ -392,8 +411,7 @@ export default abstract class HomeKitDevice {
     if (!descriptor.applySet) {
       return;
     }
-    const context = this.buildDescriptorContext();
-    const refusal = descriptor.checkSet?.(value, context);
+    const refusal = descriptor.checkSet?.(value, this.buildDescriptorContext());
     if (refusal) {
       // Nothing is sent to TTLock. Bounce HomeKit back to the real state: HAP stores the requested value after
       // this handler returns, so the revert has to come after that or it is overwritten.
@@ -405,7 +423,7 @@ export default abstract class HomeKitDevice {
       // Answer now; if the command does not take effect, put the target back to the lock's real state.
       // The revert waits a tick as well: a command that fails at once could otherwise finish before HAP stores the value.
       // The command's time limit starts now, so time spent waiting behind a poll counts too.
-      void runHomeKitWrite(LOCK_COMMAND_TIME_LIMIT_MS, () => this.executeDescriptorSet(service, descriptor, value, context))
+      void runHomeKitWrite(LOCK_COMMAND_TIME_LIMIT_MS, () => this.executeDescriptorSet(service, descriptor, value))
         .catch(error => this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error))
         .then(() => setImmediate(() => this.revertTargetIfNeeded(service, descriptor, value, true)));
       return;
@@ -413,7 +431,7 @@ export default abstract class HomeKitDevice {
     // HomeKit waits for the answer, so nothing may be sent once it has stopped waiting
     const result = await runHomeKitWrite(
       HOMEKIT_WRITE_TIME_LIMIT_MS,
-      () => this.executeDescriptorSet(service, descriptor, value, context),
+      () => this.executeDescriptorSet(service, descriptor, value),
     );
     if (result !== undefined) {
       return result;
@@ -441,7 +459,6 @@ export default abstract class HomeKitDevice {
     service: Service,
     descriptor: CharacteristicDescriptor,
     value: CharacteristicValue,
-    context: DescriptorContext,
   ): Promise<void | string> {
     const lockKey = this.makeLockKey();
     return await this.withLock(lockKey, async () => {
@@ -451,8 +468,12 @@ export default abstract class HomeKitDevice {
       if (!this.deviceManager) {
         throw new Error('Device manager undefined');
       }
+      // Built now, not when HomeKit asked: the write may have waited for the device lock, and it must read and
+      // update the lock's sys_info as it is when the write runs
+      const context = this.buildDescriptorContext();
       try {
         this.isUpdating = true;
+        this.lastWriteAt = performance.now();
         const result = await descriptor.applySet!(value, context);
         let postSetValue: CharacteristicValue;
         let descriptorsToUpdate: CharacteristicDescriptor[] = [];
@@ -493,6 +514,7 @@ export default abstract class HomeKitDevice {
           await this.stopPolling();
         }
       } finally {
+        this.lastWriteAt = performance.now();
         this.isUpdating = false;
         this.updateEmitter.emit('updateComplete');
       }
