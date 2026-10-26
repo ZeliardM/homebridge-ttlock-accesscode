@@ -64,7 +64,8 @@ npm install -g homebridge-ttlock-accesscode
 
 ## Access Code Notes
 - Access code support is exposed through the Apple Home App.
-- Existing passcodes are loaded from TTLock and mapped into the Apple Home App.
+- Permanent access codes, and period access codes while their period runs, are loaded from TTLock and shown in the Apple Home App. One-time, erase and cyclic codes, and period codes outside their period, are not shown.
+- Access codes added from the Apple Home App are permanent codes.
 - Add/Delete/List/Read flows are handled through the Apple Home App.
 
 ## Manual Door Notes
@@ -127,5 +128,8 @@ npm install -g homebridge-ttlock-accesscode
 
 ## Known Limitations
 - Apple HomeKey is not supported by TTLock readers.
-- Gateway-dependent locks will return gateway-offline conditions if the gateway is unavailable.
+- A lock that does not answer three polls in a row, for example because its gateway is offline, shows No Response in Apple Home. Polling continues, and the lock shows its state again as soon as a poll reaches it.
+- After Homebridge starts, a lock answers No Response to lock, unlock and access code requests until the plugin has found it in TTLock.
+- Lock and unlock are answered at once and sent to TTLock in the background. If a command fails, or cannot be sent in time to finish within 60 seconds of the request, Apple Home goes back to the lock's last known state. A command that could not be sent in time is not sent later.
+- Adding or deleting an access code goes through the gateway and can take longer than the roughly 9 seconds Apple Home waits. Apple Home may then report a failure even though the change was made; open the lock's access codes again to see the current list. A change that cannot be sent within those 9 seconds is not sent.
 - TTLock Cloud API limits and behavior can change without notice.
