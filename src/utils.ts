@@ -13,18 +13,30 @@ export class SimpleMutex {
   private _locked = false;
   private _waiting: Array<() => void> = [];
 
+  // True while held, and while anyone waits for it
+  get locked(): boolean {
+    return this._locked;
+  }
+
   async acquire(): Promise<() => void> {
-    while (this._locked) {
+    if (this._locked) {
+      // Release hands the mutex straight to the next waiter, so waiters get it in order and nobody can take it
+      // in between
       await new Promise<void>(resolve => this._waiting.push(resolve));
+    } else {
+      this._locked = true;
     }
-    this._locked = true;
+    let released = false;
     return () => {
-      this._locked = false;
-      if (this._waiting.length > 0) {
-        const next = this._waiting.shift();
-        if (next) {
-          next();
-        }
+      if (released) {
+        return;
+      }
+      released = true;
+      const next = this._waiting.shift();
+      if (next) {
+        next();
+      } else {
+        this._locked = false;
       }
     };
   }

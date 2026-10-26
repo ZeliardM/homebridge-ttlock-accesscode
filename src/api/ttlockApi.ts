@@ -75,6 +75,8 @@ export class TTLockApiError extends Error {
   public networkFailure?: NetworkFailure;
   // How long TTLock asked to wait before trying again (Retry-After on HTTP 429)
   public retryAfterMs?: number;
+  // Not sent: a poll skipped because the gateway queue was busy with another request. Not a failure.
+  public skipped = false;
   // Only the code of the underlying error is kept. An axios error holds the request it failed on, which carries
   // the client secret, the password hash or the access token, and a logged error must never print those.
   public readonly causeCode: string | undefined;
@@ -126,6 +128,8 @@ export type RequestOptions = {
   sendBy?: number | undefined;
   // performance.now() time by which a retry, including its full timeout, must be able to finish
   finishBy?: number | undefined;
+  // Skip the request (it fails with skipped set) instead of waiting while the gateway queue is busy (polls)
+  skipIfGatewayBusy?: boolean;
   // Runs before every attempt; throw to abort the request without sending it
   beforeAttempt?: (() => void) | undefined;
 };
@@ -158,6 +162,11 @@ export class TTLockApi {
   // A request that TTLock asks to wait longer than this before retrying is not retried: the wait would hold up
   // the lock's other requests. The next poll or discovery tries again.
   private readonly maxRetryDelayMs = 10000;
+  // A gateway handles one request at a time and answers "busy" (-3003) to a second one, and locks can share a
+  // gateway. So requests through a gateway go one at a time, with a short gap between them.
+  private readonly gatewayQueue = new SimpleMutex();
+  private readonly gatewayGapMs = 1000;
+  private lastGatewayRequestEndAt = Number.NEGATIVE_INFINITY;
   // Gateway requests that are safe to send again after the gateway could not reach the lock (errcode 1): reads and
   // lock/unlock. Not passcode add/delete, which TTLock may have applied.
   private static readonly resendSafeGatewayEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
@@ -332,8 +341,8 @@ export class TTLockApi {
     data?: Record<string, unknown>,
     options: RequestOptions = {},
   ): Promise<T> {
-    const fullEndpoint = `v3/${endpoint}`;
-    const timeout = TTLockApi.viaGatewayEndpoints.includes(endpoint) ? this.gatewayRequestTimeoutMs : this.requestTimeoutMs;
+    const viaGateway = TTLockApi.viaGatewayEndpoints.includes(endpoint);
+    const timeout = viaGateway ? this.gatewayRequestTimeoutMs : this.requestTimeoutMs;
     let authRecoveryAttempted = false;
     // The last failure that was not resolved by logging in again
     let lastError: TTLockApiError | undefined;
@@ -352,98 +361,119 @@ export class TTLockApi {
     }
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      // Outside the try: a request whose time ran out, or that a guard refuses, is neither counted nor retried.
-      // This also covers the resend after logging in again, which can take two cloud requests.
+      // Do not wait for the gateway once the time has run out
       this.ensureTimeLeft(endpoint, options, lastError);
-      options.beforeAttempt?.();
-      // Every attempt is a real API call, so every attempt counts against the budget. The resend after a new
-      // login is not a first attempt, even though it does not use up an attempt.
-      await this.reserveApiCall(endpoint, attempt === 0 && !authRecoveryAttempted);
-
-      let attemptedToken: string | null = this.accessToken;
+      // Held for this attempt only, so other requests can go between retries and while logging in again
+      const releaseGateway = viaGateway ? await this.acquireGatewayQueue(endpoint, options) : undefined;
+      let attemptedToken: string | null;
+      let normalized: TTLockApiError;
       try {
+        // Outside the request's catch: a request whose time ran out (also while it waited for the gateway), or that
+        // a guard refuses, is neither counted nor retried. This also covers the resend after logging in again.
+        this.ensureTimeLeft(endpoint, options, lastError);
+        options.beforeAttempt?.();
+        // Every attempt is a real API call, so every attempt counts against the budget. The resend after a new
+        // login is not a first attempt, even though it does not use up an attempt.
+        await this.reserveApiCall(endpoint, attempt === 0 && !authRecoveryAttempted);
         attemptedToken = this.accessToken;
-        const requestData = {
-          ...data,
-          clientId: this.clientId,
-          accessToken: this.accessToken,
-          date: Date.now(),
-        };
-
-        const response = await this.apiClient.request({
-          url: fullEndpoint,
-          method,
-          timeout,
-          headers: {
-            Authorization: `Bearer ${this.accessToken}`,
-          },
-          params: method === 'GET' ? requestData : undefined,
-          data: method === 'POST'
-            ? new URLSearchParams(
-              Object.entries(requestData).reduce<Record<string, string>>(
-                (acc, [key, value]) => {
-                  acc[key] = String(value);
-                  return acc;
-                },
-                {},
-              ),
-            ).toString()
-            : undefined,
-        });
-
-        if (this.isObject(response.data) && 'errcode' in response.data && response.data.errcode !== 0) {
-          const payload = response.data as ApiErrorPayload;
-          throw this.normalizeApiResponseError(payload, endpoint);
+        try {
+          return await this.sendRequest<T>(endpoint, method, data, timeout);
+        } catch (error) {
+          normalized = this.normalizeError(error, endpoint);
+        } finally {
+          if (viaGateway) {
+            this.lastGatewayRequestEndAt = performance.now();
+          }
         }
-        // A body that is not JSON comes back as a string; reading fields from it would give undefined values
-        if (!this.isObject(response.data)) {
-          throw new TTLockApiError(
-            `Unreadable response from TTLock for ${endpoint}`,
-            TTLockApiErrorCategory.InvalidResponse,
-            false,
-            endpoint,
-            response.status,
-          );
-        }
-
-        return response.data as T;
-      } catch (error) {
-        const normalized = this.normalizeError(error, endpoint);
-
-        if (normalized.authRelated && !authRecoveryAttempted) {
-          authRecoveryAttempted = true;
-          this.log.warn(`Auth failure for ${endpoint}; attempting internal re-authentication`);
-          await this.recoverAuthentication(attemptedToken, endpoint);
-          // The resend with the new token does not use up an attempt, so it happens even after the last one.
-          // Like any attempt, it is only sent if its time has not run out (checked at the top of the loop).
-          attempt--;
-          continue;
-        }
-        lastError = normalized;
-
-        const isLastAttempt = attempt >= this.maxRetries;
-        const delay = Math.max(this.getRetryDelayMs(attempt), normalized.retryAfterMs ?? 0);
-        const fitsInTime = options.finishBy === undefined || performance.now() + delay + timeout <= options.finishBy;
-        if (!isLastAttempt && this.shouldRetry(normalized, options) && fitsInTime && delay <= this.maxRetryDelayMs) {
-          this.log.warn(
-            `Retryable TTLock API error on ${endpoint}; category=${normalized.category}; ` +
-            `attempt=${attempt + 1}/${this.maxRetries + 1}; retrying in ${delay}ms`,
-          );
-          await this.sleep(delay);
-          continue;
-        }
-
-        if (!this.isGatewayOfflineError(normalized)) {
-          this.logApiError(`Request failed for ${endpoint}`, normalized);
-        }
-        throw normalized;
+      } finally {
+        releaseGateway?.();
       }
+
+      if (normalized.authRelated && !authRecoveryAttempted) {
+        authRecoveryAttempted = true;
+        this.log.warn(`Auth failure for ${endpoint}; attempting internal re-authentication`);
+        await this.recoverAuthentication(attemptedToken, endpoint);
+        // The resend with the new token does not use up an attempt, so it happens even after the last one.
+        // Like any attempt, it is only sent if its time has not run out (checked at the top of the loop).
+        attempt--;
+        continue;
+      }
+      lastError = normalized;
+
+      const isLastAttempt = attempt >= this.maxRetries;
+      const delay = Math.max(this.getRetryDelayMs(attempt), normalized.retryAfterMs ?? 0);
+      const fitsInTime = options.finishBy === undefined || performance.now() + delay + timeout <= options.finishBy;
+      if (!isLastAttempt && this.shouldRetry(normalized, options) && fitsInTime && delay <= this.maxRetryDelayMs) {
+        this.log.warn(
+          `Retryable TTLock API error on ${endpoint}; category=${normalized.category}; ` +
+          `attempt=${attempt + 1}/${this.maxRetries + 1}; retrying in ${delay}ms`,
+        );
+        await this.sleep(delay);
+        continue;
+      }
+
+      if (!this.isGatewayOfflineError(normalized)) {
+        this.logApiError(`Request failed for ${endpoint}`, normalized);
+      }
+      throw normalized;
     }
 
     if (lastError) {
       throw lastError;
     }
     throw new TTLockApiError('Max retries reached', TTLockApiErrorCategory.Unknown, false, endpoint);
+  }
+
+  private async sendRequest<T>(
+    endpoint: string,
+    method: 'GET' | 'POST',
+    data: Record<string, unknown> | undefined,
+    timeout: number,
+  ): Promise<T> {
+    const requestData = {
+      ...data,
+      clientId: this.clientId,
+      accessToken: this.accessToken,
+      date: Date.now(),
+    };
+
+    const response = await this.apiClient.request({
+      url: `v3/${endpoint}`,
+      method,
+      timeout,
+      headers: {
+        Authorization: `Bearer ${this.accessToken}`,
+      },
+      params: method === 'GET' ? requestData : undefined,
+      data: method === 'POST'
+        ? new URLSearchParams(
+          Object.entries(requestData).reduce<Record<string, string>>(
+            (acc, [key, value]) => {
+              acc[key] = String(value);
+              return acc;
+            },
+            {},
+          ),
+        ).toString()
+        : undefined,
+    });
+
+    if (this.isObject(response.data) && 'errcode' in response.data && response.data.errcode !== 0) {
+      const payload = response.data as ApiErrorPayload;
+      throw this.normalizeApiResponseError(payload, endpoint);
+    }
+    // A body that is not JSON comes back as a string; reading fields from it would give undefined values
+    if (!this.isObject(response.data)) {
+      throw new TTLockApiError(
+        `Unreadable response from TTLock for ${endpoint}`,
+        TTLockApiErrorCategory.InvalidResponse,
+        false,
+        endpoint,
+        response.status,
+      );
+    }
+
+    return response.data as T;
   }
 
   // A request whose time ran out is not sent. A retry that can no longer be sent in time ends with the failure
@@ -462,6 +492,29 @@ export class TTLockApi {
       false,
       endpoint,
     );
+  }
+
+  // Waits for this request's turn at the gateway, then for the gap after the previous gateway request. A poll does
+  // not wait: while another request holds the queue or waits for it, the poll is skipped.
+  private async acquireGatewayQueue(endpoint: string, options: RequestOptions): Promise<() => void> {
+    if (options.skipIfGatewayBusy && this.gatewayQueue.locked) {
+      const skipped = new TTLockApiError(
+        `Skipped ${endpoint}: the gateway is busy with another request`,
+        TTLockApiErrorCategory.ServerTransient,
+        false,
+        endpoint,
+      );
+      skipped.gatewayTransient = true;
+      skipped.skipped = true;
+      skipped.wasLogged = true;
+      throw skipped;
+    }
+    const release = await this.gatewayQueue.acquire();
+    const gapLeft = this.lastGatewayRequestEndAt + this.gatewayGapMs - performance.now();
+    if (gapLeft > 0) {
+      await this.sleep(gapLeft);
+    }
+    return release;
   }
 
   private async reserveApiCall(endpoint: string, firstAttempt: boolean): Promise<void> {
@@ -913,8 +966,9 @@ export class TTLockApi {
   public async getSysInfo(lockId: string): Promise<Partial<SysInfo>> {
     this.log.debug(`Fetching sys_info for lock: ${lockId}`);
     // A failed poll is not retried: the next poll reads the lock again, and retries would hold up the lock's
-    // commands, which wait for the poll to finish
-    const pollOptions: RequestOptions = { retry: 'none' };
+    // commands, which wait for the poll to finish. Nor does it wait for the gateway: while another request uses
+    // the gateway queue, the poll is skipped.
+    const pollOptions: RequestOptions = { retry: 'none', skipIfGatewayBusy: true };
     const sysInfo: Partial<SysInfo> = {};
     const stateResponse = await this.makeAuthenticatedRequest<{
       state: number;

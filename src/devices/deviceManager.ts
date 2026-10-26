@@ -219,7 +219,10 @@ export default class DeviceManager {
     try {
       return await this.api.getSysInfo(deviceId);
     } catch (error) {
-      this.handleManagerError(error, 'getSysInfo');
+      // A poll skipped because the gateway was busy is not an error
+      if (!(error instanceof TTLockApiError && error.skipped)) {
+        this.handleManagerError(error, 'getSysInfo');
+      }
       throw error;
     }
   }

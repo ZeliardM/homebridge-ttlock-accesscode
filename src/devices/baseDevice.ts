@@ -233,6 +233,11 @@ export default abstract class HomeKitDevice {
         this.consecutivePollFailures = 0;
         this.ttlockDevice.offline = false;
       } catch (error) {
+        if (error instanceof TTLockApiError && error.skipped) {
+          // Not a failed poll: another request was using the gateway, and the next poll reads the lock
+          this.log.debug('Poll skipped: the gateway is busy with another request');
+          return;
+        }
         this.consecutivePollFailures++;
         if (error instanceof Error && error.message.startsWith('No sys_info returned for ')) {
           this.log.warn(`Poll update failed: ${error.message}`);
