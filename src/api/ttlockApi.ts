@@ -1133,9 +1133,8 @@ export class TTLockApi {
     }
 
     this.log.debug(`Found ${response.list.length} passcodes for lock: ${lockId}`);
-    return response.list.map((item, index) => ({
+    return response.list.map(item => ({
       passcode_id: item.keyboardPwdId.toString(),
-      index: index.toString(),
       lock_id: item.lockId.toString(),
       passcode: item.keyboardPwd,
     }));

@@ -32,7 +32,6 @@ export interface FeatureInfo {
 
 export interface Passcode {
   passcode_id: string;
-  index: string;
   lock_id: string;
   passcode: string;
 }

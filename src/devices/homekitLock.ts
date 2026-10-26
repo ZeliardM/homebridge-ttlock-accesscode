@@ -29,6 +29,11 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     super(platform, ttlockDevice, Categories.DOOR_LOCK, 'DOOR_LOCK');
     this.hasPasscode = !!ttlockDevice.feature_info.passcode;
     this.setupServices();
+    // Now, from the list discovery just read, rather than when HomeKit first asks: a later discovery may read the
+    // list in another order, and the first identifiers come from the order
+    if (this.hasPasscode && Array.isArray(ttlockDevice.sys_info.passcodes)) {
+      this.syncPasscodeIdentifiers(ttlockDevice.sys_info.passcodes);
+    }
   }
 
   public async initialize(): Promise<void> {
@@ -129,16 +134,63 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
   }
 
   private async ensurePasscodesLoaded(device: SysInfo): Promise<Passcode[]> {
-    if (Array.isArray(device.passcodes)) {
-      return device.passcodes;
+    if (!Array.isArray(device.passcodes)) {
+      return await this.refreshPasscodes(device);
     }
-    device.passcodes = await this.deviceManager!.managePasscodes(device.device_id, 'get') as Passcode[];
+    // Discovery may have put a newer list in place
+    this.syncPasscodeIdentifiers(device.passcodes);
     return device.passcodes;
   }
 
   private async refreshPasscodes(device: SysInfo): Promise<Passcode[]> {
-    device.passcodes = await this.deviceManager!.managePasscodes(device.device_id, 'get') as Passcode[];
-    return device.passcodes;
+    const passcodes = await this.deviceManager!.managePasscodes(device.device_id, 'get') as Passcode[];
+    this.setCachedPasscodes(device, passcodes);
+    return passcodes;
+  }
+
+  private setCachedPasscodes(device: SysInfo, passcodes: Passcode[]): void {
+    device.passcodes = passcodes;
+    this.syncPasscodeIdentifiers(passcodes);
+  }
+
+  // HomeKit keeps the identifier it was given for each access code and later reads and removes codes by it, so an
+  // identifier stays with its code and is never given to another one, even after that code is gone. Saved with the
+  // accessory, by TTLock passcode id.
+  private syncPasscodeIdentifiers(passcodes: Passcode[]): void {
+    const context = this.homebridgeAccessory.context;
+    let identifiers = context.passcodeIdentifiers;
+    let changed = false;
+    if (!identifiers) {
+      // Earlier versions used the position in TTLock's list; starting from it keeps the identifiers the Home app has
+      const seeded: Record<string, number> = {};
+      passcodes.forEach((passcode, position) => {
+        seeded[passcode.passcode_id] ??= position;
+      });
+      identifiers = seeded;
+      changed = true;
+    }
+    let next = Math.max(
+      context.nextPasscodeIdentifier ?? 0,
+      ...Object.values(identifiers).map(identifier => identifier + 1),
+    );
+    const listed = new Set(passcodes.map(passcode => passcode.passcode_id));
+    for (const passcodeId of Object.keys(identifiers)) {
+      if (!listed.has(passcodeId)) {
+        delete identifiers[passcodeId];
+        changed = true;
+      }
+    }
+    for (const passcode of passcodes) {
+      if (identifiers[passcode.passcode_id] === undefined) {
+        identifiers[passcode.passcode_id] = next++;
+        changed = true;
+      }
+    }
+    if (changed || context.nextPasscodeIdentifier !== next) {
+      context.passcodeIdentifiers = identifiers;
+      context.nextPasscodeIdentifier = next;
+      this.platform.api.updatePlatformAccessories([this.homebridgeAccessory]);
+    }
   }
 
   // Whether a failed add or delete may still have changed the lock's codes (it got no answer, or no readable one), or
@@ -184,20 +236,30 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     }
   }
 
-  private getPasscodeIdentifier(passcode: Passcode): bigint {
-    return BigInt(passcode.index);
-  }
-
-  private encodePasscodeIdentifier(identifier: bigint): string {
-    let hex = identifier.toString(16);
-    if (hex.length % 2 !== 0) {
-      hex = `0${hex}`;
+  // Every list is synced before its codes are sent to HomeKit, so every code has an identifier
+  private getPasscodeIdentifier(passcode: Passcode): number {
+    const identifier = this.homebridgeAccessory.context.passcodeIdentifiers?.[passcode.passcode_id];
+    if (identifier === undefined) {
+      throw new Error(`Passcode id ${passcode.passcode_id} has no HomeKit identifier`);
     }
-    return hex;
+    return identifier;
   }
 
-  private findPasscodeByIdentifier(passcodes: Passcode[], identifier: bigint): Passcode | undefined {
-    return passcodes.find(passcode => this.getPasscodeIdentifier(passcode) === identifier);
+  // HAP TLV integers are little-endian, in as few bytes as the value needs
+  private encodePasscodeIdentifier(identifier: number): string {
+    const bytes: number[] = [];
+    let value = identifier;
+    do {
+      bytes.push(value % 256);
+      value = Math.floor(value / 256);
+    } while (value > 0);
+    return Buffer.from(bytes).toString('hex');
+  }
+
+  // Only by the saved identifier, never by position: a code HomeKit knows that is no longer listed is not found
+  private findPasscodeByIdentifier(passcodes: Passcode[], identifier: number): Passcode | undefined {
+    const identifiers = this.homebridgeAccessory.context.passcodeIdentifiers ?? {};
+    return passcodes.find(passcode => identifiers[passcode.passcode_id] === identifier);
   }
 
   private buildPasscodeResponseRecord(passcode: Passcode): string {
@@ -223,17 +285,25 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     return Number(operation.value.toString('hex'));
   }
 
-  private parseIdentifierRequest(element: { value: Buffer }, requestType: string): bigint {
+  private parseIdentifierRequest(element: { value: Buffer }, requestType: string): number {
     const request = TlvFactory.parse(element.value);
     const identifierRecord = request[0];
     if (!identifierRecord) {
-      throw new AccessCodeProtocolError(`${requestType} request is missing its passcode index`);
+      throw new AccessCodeProtocolError(`${requestType} request is missing its passcode identifier`);
     }
-    const identifier = identifierRecord.value.toString('hex');
-    if (!identifier) {
-      throw new AccessCodeProtocolError(`${requestType} request contained an empty passcode index`);
+    const bytes = identifierRecord.value;
+    if (bytes.length === 0) {
+      throw new AccessCodeProtocolError(`${requestType} request contained an empty passcode identifier`);
     }
-    return BigInt(`0x${identifier}`);
+    // Little-endian; zero high bytes do not change the value
+    let length = bytes.length;
+    while (length > 1 && bytes[length - 1] === 0) {
+      length--;
+    }
+    if (length > 6) {
+      throw new AccessCodeProtocolError(`${requestType} request contained a passcode identifier that is too large`);
+    }
+    return bytes.readUIntLE(0, length);
   }
 
   private parsePasscodeRequest(element: { value: Buffer }): string {
@@ -263,7 +333,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       const passcodeIdentifier = this.parseIdentifierRequest(element, 'Read');
       const passcode = this.findPasscodeByIdentifier(passcodes, passcodeIdentifier);
       if (!passcode) {
-        throw new AccessCodeProtocolError(`Passcode identifier ${passcodeIdentifier.toString()} was not found for read`);
+        throw new AccessCodeProtocolError(`Passcode identifier ${passcodeIdentifier} was not found for read`);
       }
       this.log.debug(`Reading passcode id ${passcode.passcode_id} on ${this.name}`);
       return this.buildPasscodeResponseRecord(passcode);
@@ -319,15 +389,8 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     }
     // TTLock's answer says what was added. Reading the list again would cost a call and time HomeKit is waiting, and
     // if that read failed, an add that was done would be answered as failed.
-    const cachedPasscodes = device.passcodes ?? [];
-    const passcode: Passcode = {
-      passcode_id: passcodeId,
-      // After the codes already listed: a delete leaves the others' indexes as they are
-      index: String(cachedPasscodes.reduce((last, existing) => Math.max(last, Number(existing.index)), -1) + 1),
-      lock_id: device.device_id,
-      passcode: newPassCode,
-    };
-    device.passcodes = [...cachedPasscodes, passcode];
+    const passcode: Passcode = { passcode_id: passcodeId, lock_id: device.device_id, passcode: newPassCode };
+    this.setCachedPasscodes(device, [...(device.passcodes ?? []), passcode]);
     return passcode;
   }
 
@@ -335,22 +398,25 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     device: SysInfo,
     decodedTlv: Array<{ value: Buffer }>,
   ): Promise<string> {
-    if (decodedTlv.length < 2) {
-      throw new AccessCodeProtocolError('Delete request is missing the target passcode index');
+    const deleteRequests = decodedTlv.slice(1);
+    if (deleteRequests.length === 0) {
+      throw new AccessCodeProtocolError('Delete request is missing the target passcode identifier');
     }
-    const deleteRequest = decodedTlv[1];
-    if (!deleteRequest) {
-      throw new AccessCodeProtocolError('Delete request is missing the target passcode index');
+    const records: string[] = [];
+    for (const element of deleteRequests) {
+      const passcodes = await this.ensurePasscodesLoaded(device);
+      const deletePasscodeIdentifier = this.parseIdentifierRequest(element, 'Delete');
+      const passcode = this.findPasscodeByIdentifier(passcodes, deletePasscodeIdentifier);
+      if (!passcode) {
+        throw new AccessCodeProtocolError(`Passcode identifier ${deletePasscodeIdentifier} was not found for delete`);
+      }
+      // Built first: once the code is deleted, its identifier is let go
+      const record = this.buildPasscodeResponseRecord(passcode);
+      this.log.info(`Deleting passcode id ${passcode.passcode_id} on ${this.name}`);
+      await this.deletePasscode(device, passcode);
+      records.push(record);
     }
-    const passcodes = await this.ensurePasscodesLoaded(device);
-    const deletePasscodeIdentifier = this.parseIdentifierRequest(deleteRequest, 'Delete');
-    const passcode = this.findPasscodeByIdentifier(passcodes, deletePasscodeIdentifier);
-    if (!passcode) {
-      throw new AccessCodeProtocolError(`Passcode identifier ${deletePasscodeIdentifier.toString()} was not found for delete`);
-    }
-    this.log.info(`Deleting passcode id ${passcode.passcode_id} on ${this.name}`);
-    await this.deletePasscode(device, passcode);
-    return `010105${this.buildPasscodeResponseRecord(passcode)}`;
+    return `010105${records.join('0000')}`;
   }
 
   // Like an add, a delete that may have reached TTLock is not sent again; the list says whether it took effect
@@ -368,7 +434,8 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       return;
     }
     // TTLock confirmed it; as after an add, the list is not read again
-    device.passcodes = (device.passcodes ?? []).filter(existing => existing.passcode_id !== passcode.passcode_id);
+    const remaining = (device.passcodes ?? []).filter(existing => existing.passcode_id !== passcode.passcode_id);
+    this.setCachedPasscodes(device, remaining);
   }
 
   private async setAccessCodeControlPoint(device: SysInfo, value: CharacteristicValue): Promise<string> {

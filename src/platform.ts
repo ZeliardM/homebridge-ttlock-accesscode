@@ -35,6 +35,10 @@ export type TTLockAccessoryContext = {
   deviceId?: string;
   lastSeen?: Date;
   offline?: boolean;
+  // The HomeKit identifier of each access code, by TTLock passcode id. HomeKit keeps them, so they never change.
+  passcodeIdentifiers?: Record<string, number>;
+  // The identifier the next new access code gets; identifiers are never used again
+  nextPasscodeIdentifier?: number;
 };
 
 export type ManualDoorAccessoryContext = {
