@@ -41,9 +41,6 @@ export default abstract class HomeKitDevice {
   private static locks: Map<string, Promise<unknown>> = new Map();
   private pendingChanges: Map<string, { pendingValue: CharacteristicValue; count: number }> = new Map();
   private removedFromPlatform = false;
-  private readonly periodicDiscoveryCompleteHandler = () => {
-    this.updateEmitter.emit('periodicDeviceDiscoveryComplete');
-  };
 
   protected getSysInfoDeferred: () => Promise<void>;
 
@@ -64,7 +61,6 @@ export default abstract class HomeKitDevice {
     this.log = prefixLogger(this.platform.log, `[${this.name}]`);
     this.homebridgeAccessory = this.initializeAccessory();
     this.homebridgeAccessory.on(PlatformAccessoryEvent.IDENTIFY, () => this.identify());
-    this.platform.periodicDeviceDiscoveryEmitter.on('periodicDeviceDiscoveryComplete', this.periodicDiscoveryCompleteHandler);
 
     this.getSysInfoDeferred = deferAndCombine(
       this.fetchSysInfoInternal.bind(this),
@@ -171,22 +167,6 @@ export default abstract class HomeKitDevice {
     return this.removedFromPlatform || this.ttlockDevice.offline || this.platform.isShuttingDown;
   }
 
-  protected async waitForUpdateOrDiscovery(): Promise<void> {
-    let discoveryFinished = false;
-    await Promise.race([
-      new Promise<void>(resolve => this.updateEmitter.once('updateComplete', resolve)),
-      new Promise<void>(resolve => {
-        this.updateEmitter.once('periodicDeviceDiscoveryComplete', () => {
-          discoveryFinished = true;
-          resolve();
-        });
-      }),
-    ]);
-    if (discoveryFinished && this.pollingInterval) {
-      await new Promise(r => setTimeout(r, this.platform.config.discoveryOptions.pollingInterval));
-    }
-  }
-
   protected async getSysInfo(): Promise<void> {
     await this.getSysInfoDeferred();
   }
@@ -219,9 +199,6 @@ export default abstract class HomeKitDevice {
       if (this.shouldSkipUpdate()) {
         await this.stopPolling();
         return;
-      }
-      if (this.isUpdating || this.platform.periodicDeviceDiscovering) {
-        await this.waitForUpdateOrDiscovery();
       }
       this.isUpdating = true;
       try {
@@ -309,11 +286,8 @@ export default abstract class HomeKitDevice {
   public removeFromPlatform(): void {
     this.removedFromPlatform = true;
     void this.stopPolling();
-    this.platform.periodicDeviceDiscoveryEmitter.off(
-      'periodicDeviceDiscoveryComplete',
-      this.periodicDiscoveryCompleteHandler,
-    );
-    this.updateEmitter.emit('periodicDeviceDiscoveryComplete');
+    // Release anything still waiting on this lock
+    this.updateEmitter.emit('updateComplete');
   }
 
   public updateAfterPeriodicDiscovery(force = false): void {

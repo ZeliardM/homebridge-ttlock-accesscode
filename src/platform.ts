@@ -9,8 +9,6 @@ import type {
   WithUUID,
 } from 'homebridge';
 
-import { EventEmitter } from 'node:events';
-
 import HomeKitDevice from './devices/baseDevice.js';
 import create from './devices/create.js';
 import DeviceManager from './devices/deviceManager.js';
@@ -74,7 +72,6 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   public deviceManager: DeviceManager | undefined;
   public isShuttingDown: boolean = false;
   public periodicDeviceDiscovering: boolean = false;
-  public periodicDeviceDiscoveryEmitter: EventEmitter;
   public ttLockApi: TTLockApi | undefined;
   public usageTracker: UsageTracker | undefined;
   public taskQueue: TaskQueue;
@@ -102,10 +99,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       this.config = parseConfig({});
       this.configInvalid = true;
     }
-    this.periodicDeviceDiscoveryEmitter = new EventEmitter();
     this.taskQueue = new TaskQueue(this.log, () => this.isShuttingDown);
 
-    this.periodicDeviceDiscoveryEmitter.setMaxListeners(255);
     this.setupDeviceEventEmitter('firstDiscovery');
 
     this.platformInitialization = this.initializePlatform();
@@ -404,7 +399,6 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.log.warn('Skipping offline accessory reconciliation because periodic discovery did not complete successfully');
       }
       this.periodicDeviceDiscovering = false;
-      this.periodicDeviceDiscoveryEmitter.emit('periodicDeviceDiscoveryComplete');
       this.log.debug('Finished periodic device discovery');
     }
   }
