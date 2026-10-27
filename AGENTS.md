@@ -28,7 +28,7 @@ Deploy: `homebridge-deploy --plugin homebridge-ttlock-accesscode` (only after my
 - Don't edit `CHANGELOG.md` or bump `version` by hand: the workflows do both.
 - Keep the TTLock API usage protection (polling adapts to the monthly call limit) and the door safety block (lock and unlock commands are ignored while the linked door is open, unknown or unavailable).
 - The TTLock login, OAuth client ID and secret, and DIRIGERA tokens live in the Homebridge config.
-- Lock and unlock are answered to HomeKit at once and sent in the background within a time limit counted from the HomeKit request; access-code writes must answer within HomeKit's 9 s.
+- Lock and unlock are answered to HomeKit at once and sent in the background within a time limit counted from the HomeKit request. Access-code adds and deletes are answered when done and are not sent once HomeKit's 9 s have passed; one already sent is left to finish (never aborted), even past the 9 s.
 - Never resend `keyboardPwd/add` or `keyboardPwd/delete` after a failure TTLock may have acted on; read the list again instead.
 - Requests through a gateway go one at a time through the gateway queue; a poll skips instead of waiting for it.
 - Polls, and discovery once one has completed, must not use the API calls kept in reserve for HomeKit requests.
