@@ -5,7 +5,6 @@ import type { CharacteristicDescriptor, DescriptorContext } from './deviceTypes.
 export function buildLockDescriptors(
   C: typeof Characteristic,
   setTarget: (value: number | CharacteristicValue, context: DescriptorContext) => Promise<boolean | void>,
-  checkTarget?: (value: CharacteristicValue, context: DescriptorContext) => string | undefined,
 ): CharacteristicDescriptor[] {
   // LockTargetState only accepts SECURED or UNSECURED; the current state can also be JAMMED or UNKNOWN
   const targetFromState = (state: number | undefined) =>
@@ -29,7 +28,6 @@ export function buildLockDescriptors(
       syncHomeKitValueAfterSet: true,
       getInitial: context => targetFromState(context.device.state),
       getCurrent: context => targetFromState(context.device.state),
-      checkSet: checkTarget,
       applySetInBackground: true,
       describeSet: value => Number(value) === C.LockTargetState.SECURED ? 'lock' : 'unlock',
       applySet: async (value, context) => {

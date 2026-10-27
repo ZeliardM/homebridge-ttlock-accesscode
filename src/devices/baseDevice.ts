@@ -24,7 +24,7 @@ import type {
   SysInfo,
   TTLockDevice,
 } from './deviceTypes.js';
-import type { TTLockAccessoryContext } from '../platform.js';
+import type { TTLockAccessCodeAccessoryContext } from '../platform.js';
 
 // A lock whose state is not known yet is read this soon after polling starts, a few seconds apart per position, instead
 // of at its slot up to a whole polling interval later
@@ -36,7 +36,7 @@ const UNKNOWN_STATE_POLL_ATTEMPTS = 5;
 export default abstract class HomeKitDevice {
   readonly log: Logger;
   protected deviceManager: DeviceManager | undefined;
-  public homebridgeAccessory: PlatformAccessory<TTLockAccessoryContext>;
+  public homebridgeAccessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>;
   public isUpdating = false;
   protected previousSnapshot?: TTLockDevice;
   // The next scheduled poll. Each scheduled poll sets the next one when it is done.
@@ -88,14 +88,13 @@ export default abstract class HomeKitDevice {
     }
   }
 
-  private initializeAccessory(): PlatformAccessory<TTLockAccessoryContext> {
+  private initializeAccessory(): PlatformAccessory<TTLockAccessCodeAccessoryContext> {
     const uuid = this.platform.api.hap.uuid.generate(this.id);
-    const existingAccessory = this.platform.configuredAccessories.get(uuid) as PlatformAccessory<TTLockAccessoryContext> | undefined;
-    let accessory: PlatformAccessory<TTLockAccessoryContext>;
+    const existingAccessory = this.platform.configuredAccessories.get(uuid);
+    let accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>;
     if (!existingAccessory) {
       this.log.debug(`Creating new Platform Accessory [${this.id}] [${uuid}] category: ${this.categoryName}`);
       accessory = new this.platform.api.platformAccessory(this.name, uuid, this.category);
-      accessory.context.kind = 'ttlock';
       accessory.context.deviceId = this.id;
       accessory.context.lastSeen = this.ttlockDevice.last_seen;
       accessory.context.offline = this.ttlockDevice.offline;
@@ -111,7 +110,7 @@ export default abstract class HomeKitDevice {
     return accessory;
   }
 
-  private updateAccessory(accessory: PlatformAccessory<TTLockAccessoryContext>): void {
+  private updateAccessory(accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>): void {
     const currentDisplayName = accessory.displayName;
     const deviceName = this.name;
     let displayNameChanged = false;
@@ -122,7 +121,6 @@ export default abstract class HomeKitDevice {
     }
 
     accessory.context.deviceId = this.id;
-    accessory.context.kind = 'ttlock';
     accessory.context.lastSeen = this.ttlockDevice.last_seen;
     accessory.context.offline = this.ttlockDevice.offline;
     this.platform.configuredAccessories.set(accessory.UUID, accessory);
@@ -486,17 +484,11 @@ export default abstract class HomeKitDevice {
     if (!descriptor.applySet) {
       return;
     }
-    const refusal = descriptor.checkSet?.(value, this.buildDescriptorContext());
-    if (refusal) {
-      // Nothing is sent to TTLock. Bounce HomeKit back to the real state: HAP stores the requested value after
-      // this handler returns, so the revert has to come after that or it is overwritten.
-      setImmediate(() => this.revertTargetIfNeeded(service, descriptor, value));
-      return;
-    }
     if (descriptor.applySetInBackground) {
       // HomeKit shows "No Response" after about 10s, and lock commands through a gateway can take longer.
       // Answer now; if the command does not take effect, put the target back to the lock's real state.
-      // The revert waits a tick as well: a command that fails at once could otherwise finish before HAP stores the value.
+      // The revert waits a tick: HAP stores the requested value after this handler returns, and a command that
+      // fails at once could otherwise finish first and have its revert overwritten.
       // The command's time limit starts now, so time spent waiting behind a poll counts too.
       void runHomeKitWrite(LOCK_COMMAND_TIME_LIMIT_MS, () => this.executeDescriptorSet(service, descriptor, value))
         .catch(error => {
@@ -505,7 +497,7 @@ export default abstract class HomeKitDevice {
             this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
           }
         })
-        .then(() => setImmediate(() => this.revertTargetIfNeeded(service, descriptor, value, true)));
+        .then(() => setImmediate(() => this.revertTargetIfNeeded(service, descriptor, value)));
       return;
     }
     // HomeKit waits for the answer, so nothing may be sent once it has stopped waiting. A write that fails is
@@ -523,7 +515,6 @@ export default abstract class HomeKitDevice {
     service: Service,
     descriptor: CharacteristicDescriptor,
     requested: CharacteristicValue,
-    logRevert = false,
   ): void {
     const characteristic = service.getCharacteristic(descriptor.type);
     // Read the lock's state as it is now, not as it was when the command started
@@ -533,12 +524,10 @@ export default abstract class HomeKitDevice {
     if (characteristic.value === current) {
       return;
     }
-    if (logRevert) {
-      const what = descriptor.describeSet
-        ? `The ${descriptor.describeSet(requested)} command did not complete`
-        : `${descriptor.name ?? descriptor.type.UUID} did not change to ${requested}`;
-      this.log.warn(`${what}; reverting HomeKit to the lock's current state`);
-    }
+    const what = descriptor.describeSet
+      ? `The ${descriptor.describeSet(requested)} command did not complete`
+      : `${descriptor.name ?? descriptor.type.UUID} did not change to ${requested}`;
+    this.log.warn(`${what}; reverting HomeKit to the lock's current state`);
     characteristic.updateValue(current);
   }
 

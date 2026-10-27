@@ -29,8 +29,7 @@ import type { TTLockAccessCodeConfig } from './config.js';
 import type { TTLockDevice } from './devices/deviceTypes.js';
 import type { PackageConfig } from './utils.js';
 
-export type TTLockAccessoryContext = {
-  kind?: 'ttlock';
+export type TTLockAccessCodeAccessoryContext = {
   deviceId?: string;
   lastSeen?: Date;
   offline?: boolean;
@@ -39,19 +38,6 @@ export type TTLockAccessoryContext = {
   // The identifier the next new access code gets; identifiers are never used again
   nextPasscodeIdentifier?: number;
 };
-
-export type ManualDoorAccessoryContext = {
-  kind: 'manualDoor';
-  lastSeen?: Date;
-  manualDoorBatteryPercentage?: number;
-  manualDoorId?: string;
-  manualDoorLinkedLockId?: string;
-  manualDoorOpen?: boolean;
-  manualDoorSensorId?: string;
-  offline?: boolean;
-};
-
-export type TTLockAccessCodeAccessoryContext = TTLockAccessoryContext | ManualDoorAccessoryContext;
 
 // The polling interval all locks share, and when the first round of polls at it started (performance.now())
 export type PollingRound = { intervalMs: number; startedAt: number };
@@ -90,6 +76,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   public usageTracker: UsageTracker | undefined;
   public taskQueue: TaskQueue;
   private readonly homekitDevicesById: Map<string, HomeKitDevice> = new Map();
+  // Door accessories cached by a 2.x version, removed at launch (see configureAccessory)
+  private readonly cachedDoorAccessories: Map<string, PlatformAccessory> = new Map();
   private deviceDiscoveredHandler: ((device: TTLockDevice) => Promise<void>) | undefined;
   // performance.now() when the running or last discovery started
   private discoveryStartedAt = 0;
@@ -130,6 +118,12 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       this.config = parseConfig({});
       this.configInvalid = true;
     }
+    if (config.externalDoors !== undefined) {
+      this.log.warn(
+        'IKEA DIRIGERA doors are no longer supported, so the `externalDoors` setting is ignored. ' +
+        'Remove it from the plugin config to stop this warning.',
+      );
+    }
     this.taskQueue = new TaskQueue(this.log, () => this.isShuttingDown);
 
     this.setupDeviceEventEmitter('firstDiscovery');
@@ -141,6 +135,14 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
     this.api.on('didFinishLaunching', async () => {
       this.log.debug('TTLockAccessCode Platform finished launching');
+      // Even when the config is invalid or initialization failed: nothing uses these doors any more
+      if (this.cachedDoorAccessories.size > 0) {
+        for (const door of this.cachedDoorAccessories.values()) {
+          this.log.info(`Removing cached IKEA DIRIGERA door accessory [${door.displayName}]: DIRIGERA doors are no longer supported`);
+        }
+        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, Array.from(this.cachedDoorAccessories.values()));
+        this.cachedDoorAccessories.clear();
+      }
       try {
         await this.platformInitialization;
       } catch (error) {
@@ -183,7 +185,6 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       if (this.deviceDiscoveredHandler) {
         deviceEventEmitter.off('deviceDiscovered', this.deviceDiscoveredHandler);
       }
-      this.deviceManager?.stopExternalDoors();
       this.log.debug('Stopping all polling tasks');
       for (const device of this.homekitDevicesById.values()) {
         await device.stopPolling(true);
@@ -298,7 +299,6 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       this.log.debug('Initializing DeviceManager');
       this.deviceManager = new DeviceManager(this);
       this.log.debug('DeviceManager initialized');
-      this.deviceManager.initializeExternalDoors();
 
       const locksBefore = this.getTTLockDeviceIds().join(',');
       await this.discoverDevices();
@@ -595,9 +595,6 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private handleOfflineDevices(discoveredDeviceIds: Set<string>): void {
     const now = new Date();
     this.configuredAccessories.forEach((accessory, uuid) => {
-      if (accessory.context.kind === 'manualDoor') {
-        return;
-      }
       const deviceId = accessory.context.deviceId;
       if (!deviceId) {
         this.log.warn(`Accessory [${accessory.displayName}] is missing a deviceId.`);
@@ -607,13 +604,13 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.log.debug(`Accessory [${accessory.displayName}] was discovered and is online.`);
         this.updateAccessoryStatus(accessory, now, false);
       } else {
-        this.handleOfflineAccessory(accessory as PlatformAccessory<TTLockAccessoryContext>, uuid, now);
+        this.handleOfflineAccessory(accessory, uuid, now);
       }
     });
   }
 
   private handleOfflineAccessory(
-    accessory: PlatformAccessory<TTLockAccessoryContext>,
+    accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>,
     uuid: string,
     now: Date,
   ): void {
@@ -632,7 +629,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
   private findPlatformAccessory(deviceId: string): PlatformAccessory<TTLockAccessCodeAccessoryContext> | undefined {
     for (const accessory of this.configuredAccessories.values()) {
-      if (accessory.context.kind !== 'manualDoor' && accessory.context.deviceId === deviceId) {
+      if (accessory.context.deviceId === deviceId) {
         return accessory;
       }
     }
@@ -879,14 +876,12 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
   private getTTLockDeviceIds(): string[] {
     return Array.from(this.configuredAccessories.values())
-      .flatMap(accessory => (accessory.context.kind !== 'manualDoor' && accessory.context.deviceId) ? [accessory.context.deviceId] : [])
+      .flatMap(accessory => accessory.context.deviceId ? [accessory.context.deviceId] : [])
       .sort();
   }
 
   public getTTLockAccessoryCount(): number {
-    return Array.from(this.configuredAccessories.values())
-      .filter(accessory => accessory.context.kind !== 'manualDoor')
-      .length;
+    return this.configuredAccessories.size;
   }
 
   // Each lock's poll slot and the polling interval depend on all the locks, but a lock that discovery adds starts
@@ -962,9 +957,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   configureAccessory(accessory: PlatformAccessory<TTLockAccessCodeAccessoryContext>): void {
     this.log.debug(`Configuring Platform Accessory: [${accessory.displayName}] UUID: ${accessory.UUID}`);
 
-    if (accessory.context.kind === 'manualDoor') {
-      this.log.debug(`Configuring cached manual door accessory: [${accessory.displayName}]`);
-      this.configuredAccessories.set(accessory.UUID, accessory);
+    // Door accessories cached by a 2.x version, before the IKEA DIRIGERA door integration was removed
+    if ((accessory.context as { kind?: unknown }).kind === 'manualDoor') {
+      this.log.debug(`Cached IKEA DIRIGERA door accessory [${accessory.displayName}] will be removed at launch`);
+      this.cachedDoorAccessories.set(accessory.UUID, accessory);
       return;
     }
 

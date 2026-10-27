@@ -4,7 +4,7 @@ import type { CharacteristicValue, Service, WithUUID } from 'homebridge';
 import pkg from 'ber-tlv';
 
 import HomeKitDevice from './baseDevice.js';
-import { LOCK_COMMAND_TIME_LIMIT_MS, LockCommandBlockedError } from './deviceManager.js';
+import { LOCK_COMMAND_TIME_LIMIT_MS } from './deviceManager.js';
 import { TTLockApiError, TTLockApiErrorCategory } from '../api/ttlockApi.js';
 import {
   buildAccessCodeDescriptors,
@@ -62,11 +62,6 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
           try {
             await this.deviceManager!.controlDevice(context.device.device_id, 'state', value);
           } catch (error) {
-            // The door changed while the command was waiting or retrying
-            if (error instanceof LockCommandBlockedError) {
-              this.log.warn(`Stopped ${action} command for ${context.alias}: ${error.message}`);
-              return false;
-            }
             // It waited too long (behind a poll or another request) to be sure the lock would not move late
             if (error instanceof TTLockApiError && error.category === TTLockApiErrorCategory.DeadlineExpired) {
               this.log.warn(
@@ -81,14 +76,6 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
           // did not; HomeKit stops showing No Response without waiting for the next poll
           this.markDeviceReachable();
           return true;
-        },
-        (value, context) => {
-          const blockReason = this.deviceManager?.getLockCommandBlockReason(context.device.device_id);
-          if (blockReason) {
-            const action = Number(value) === C.LockTargetState.SECURED ? 'lock' : 'unlock';
-            this.log.warn(`Ignoring ${action} command for ${context.alias}: ${blockReason}`);
-          }
-          return blockReason;
         },
       );
     }

@@ -71,24 +71,12 @@ async function createTTLockApi(payload) {
   return api;
 }
 
-async function createDirigeraClient(payload) {
-  const gatewayIP = getRequiredString(payload, 'gatewayIP', 'DIRIGERA gateway IP');
-  const { createDirigeraClient } = await import('dirigera');
-
-  return createDirigeraClient({
-    gatewayIP,
-    accessToken: payload?.accessToken,
-  });
-}
-
 class TTLockAccessCodeUiServer extends HomebridgePluginUiServer {
   constructor() {
     super();
 
     this.onRequest('/ttlock-test-auth', this.testTTLockAuth.bind(this));
     this.onRequest('/ttlock-locks', this.listTTLockLocks.bind(this));
-    this.onRequest('/dirigera-authenticate', this.authenticateDirigera.bind(this));
-    this.onRequest('/dirigera-open-close-sensors', this.listDirigeraOpenCloseSensors.bind(this));
 
     this.ready();
   }
@@ -109,29 +97,6 @@ class TTLockAccessCodeUiServer extends HomebridgePluginUiServer {
     } catch (error) {
       throw toRequestError(error);
     }
-  }
-
-  async authenticateDirigera(payload) {
-    const client = await createDirigeraClient(payload);
-    const accessToken = await client.authenticate({ verbose: false });
-    return { accessToken };
-  }
-
-  async listDirigeraOpenCloseSensors(payload) {
-    const accessToken = getRequiredString(payload, 'accessToken', 'DIRIGERA access token');
-    const client = await createDirigeraClient({ ...payload, accessToken });
-    const sensors = await client.openCloseSensors.list();
-
-    return sensors.map((sensor) => ({
-      batteryPercentage: sensor.attributes?.batteryPercentage,
-      id: sensor.id,
-      isOpen: sensor.attributes?.isOpen,
-      isReachable: Boolean(sensor.isReachable),
-      manufacturer: sensor.attributes?.manufacturer || '',
-      model: sensor.attributes?.model || '',
-      name: sensor.attributes?.customName || sensor.attributes?.model || sensor.id,
-      roomName: sensor.room?.name || '',
-    }));
   }
 }
 

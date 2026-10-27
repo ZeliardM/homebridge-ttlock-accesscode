@@ -136,8 +136,6 @@ export type RequestOptions = {
   // The caller logs a failure itself and says which lock it was (a poll logs once per run of failed polls); it is
   // logged here at debug only
   callerLogsFailure?: boolean;
-  // Runs before every attempt; throw to abort the request without sending it
-  beforeAttempt?: (() => void) | undefined;
   // 'user' for what HomeKit asks for (locking, unlocking, access codes), which may use the API calls kept in reserve
   // at the end of the month; 'background' (the default) for polls and discovery, which may not
   priority?: ApiCallPriority;
@@ -145,7 +143,6 @@ export type RequestOptions = {
 
 export type LockCommandOptions = {
   finishBy: number;
-  beforeAttempt?: (() => void) | undefined;
 };
 
 export type TTLockSetupLock = {
@@ -390,11 +387,10 @@ export class TTLockApi {
       let attemptedToken: string | null;
       let normalized: TTLockApiError;
       try {
-        // Outside the request's catch: a request whose time ran out (also while it waited for the gateway), or that
-        // a guard refuses, is neither counted nor retried. This also covers the resend after logging in again.
+        // Outside the request's catch: a request whose time ran out (also while it waited for the gateway) is neither
+        // counted nor retried. This also covers the resend after logging in again.
         this.ensureNotStopped(endpoint, options, lastError);
         this.ensureTimeLeft(endpoint, options, lastError);
-        options.beforeAttempt?.();
         // Every attempt is a real API call, so every attempt counts against the budget. The resend after a new
         // login is not a first attempt, even though it does not use up an attempt.
         await this.reserveApiCall(endpoint, attempt === 0 && !authRecoveryAttempted, priority);
@@ -1204,7 +1200,7 @@ export class TTLockApi {
   }
 
   // finishBy: performance.now() time by which the command must be done, so a lock never moves long after it was
-  // asked to. beforeAttempt runs before every attempt, including retries, so a safety check can stop a retry.
+  // asked to
   public async lock(lockId: string, options: LockCommandOptions): Promise<void> {
     this.log.debug(`Locking lock: ${lockId}`);
     await this.makeAuthenticatedRequest('lock/lock', 'POST', { lockId }, this.lockCommandOptions(options));
@@ -1223,7 +1219,6 @@ export class TTLockApi {
       retryGatewayErrors: true,
       sendBy: options.finishBy - this.gatewayRequestTimeoutMs,
       finishBy: options.finishBy,
-      beforeAttempt: options.beforeAttempt,
       priority: 'user',
     };
   }
