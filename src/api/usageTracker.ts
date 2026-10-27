@@ -104,23 +104,27 @@ export class UsageTracker extends EventEmitter {
   }
 
   // The stored usage; null when there is no usage file yet, undefined when it cannot be read or does not hold valid
-  // usage. Such a file is moved aside: it stays there to look at, and the next save starts a new one. A file that
-  // cannot be read may still hold this month's count, so when it cannot be moved aside either, usage is not saved
-  // in this run rather than saved over it.
+  // usage. A file that does not hold valid usage is moved aside: it stays there to look at, and the next save starts
+  // a new one. A file that cannot be read may still hold this month's count, so it stays where it is until a save
+  // replaces it: if saves fail too (EMFILE, EIO), the next start reads it again. A copy is kept aside first, as a
+  // hard link; when that fails, usage is not saved in this run rather than saved over the file.
   private async readStoredUsage(filePath: string): Promise<Pick<StoredUsage, 'year' | 'month' | 'used'> | null | undefined> {
     let data: string | null;
     try {
       data = await this.readUsageFile(filePath);
     } catch (err) {
-      const asidePath = `${filePath}.unreadable-${Date.now()}`;
+      const copyPath = `${filePath}.unreadable-${Date.now()}`;
       try {
-        await fs.rename(filePath, asidePath);
-        this.log.error(`Could not read the API usage file ${filePath}: ${errorText(err)}; moved it to ${asidePath}`);
-      } catch (renameErr) {
+        await fs.link(filePath, copyPath);
+        this.log.error(
+          `Could not read the API usage file ${filePath}: ${errorText(err)}; kept a copy of it at ${copyPath}, ` +
+          'and the next save replaces it',
+        );
+      } catch (linkErr) {
         this.storageFilePath = undefined;
         this.log.error(
-          `Could not read the API usage file ${filePath}: ${errorText(err)}; it could not be moved aside either ` +
-          `(${errorText(renameErr)}), so API usage is not saved until Homebridge restarts`,
+          `Could not read the API usage file ${filePath}: ${errorText(err)}; no copy of it could be kept ` +
+          `(${errorText(linkErr)}), so API usage is not saved until Homebridge restarts`,
         );
       }
       return undefined;
