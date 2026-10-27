@@ -300,6 +300,10 @@ export class UsageTracker extends EventEmitter {
     if (remaining - n >= this.userReserve) {
       return true;
     }
+    // A discovery that does not fit while polls still do is not the pause; the platform logs the skipped discovery
+    if (remaining - 1 >= this.userReserve) {
+      return false;
+    }
     if (!this.backgroundPaused) {
       this.backgroundPaused = true;
       this.log.warn(
