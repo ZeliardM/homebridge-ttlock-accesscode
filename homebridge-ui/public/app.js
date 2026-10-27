@@ -13,12 +13,13 @@
     waitTimeUpdate: 100,
   };
   const ACCOUNT_FIELDS = ['clientId', 'clientSecret', 'username', 'password'];
-  const NUMBER_FIELDS = new Set([
-    'totalApiCallsPerMonth',
-    'pollingInterval',
-    'discoveryPollingInterval',
-    'offlineInterval',
-    'waitTimeUpdate',
+  // The range each number field is saved in
+  const NUMBER_FIELDS = new Map([
+    ['totalApiCallsPerMonth', { minimum: 30000 }],
+    ['pollingInterval', { minimum: 30, maximum: 2147483 }],
+    ['discoveryPollingInterval', { minimum: 1, maximum: 596 }],
+    ['offlineInterval', { minimum: 1 }],
+    ['waitTimeUpdate', { minimum: 0, maximum: 60000 }],
   ]);
 
   const app = document.getElementById('app');
@@ -75,12 +76,22 @@
     return state.platformConfig.externalDoors;
   }
 
+  // A blank value (a cleared field, or text the browser cannot read as a number) takes the default, not the minimum
   function parseNumber(value, fallback, minimum, maximum = Infinity) {
-    const numberValue = Number(String(value ?? '').trim());
+    const text = String(value ?? '').trim();
+    if (text === '') {
+      return fallback;
+    }
+    const numberValue = Number(text);
     if (!Number.isFinite(numberValue)) {
       return fallback;
     }
     return Math.min(maximum, Math.max(minimum, Math.floor(numberValue)));
+  }
+
+  function parsePlatformNumber(field, value) {
+    const { minimum, maximum } = NUMBER_FIELDS.get(field);
+    return parseNumber(value, DEFAULTS[field], minimum, maximum);
   }
 
   function isAccountReady() {
@@ -692,11 +703,11 @@
       clientSecret: String(block.clientSecret || ''),
       username: String(block.username || '').trim(),
       password: String(block.password || ''),
-      totalApiCallsPerMonth: parseNumber(block.totalApiCallsPerMonth, DEFAULTS.totalApiCallsPerMonth, 30000),
-      pollingInterval: parseNumber(block.pollingInterval, DEFAULTS.pollingInterval, 30, 2147483),
-      discoveryPollingInterval: parseNumber(block.discoveryPollingInterval, DEFAULTS.discoveryPollingInterval, 1, 596),
-      offlineInterval: parseNumber(block.offlineInterval, DEFAULTS.offlineInterval, 1),
-      waitTimeUpdate: parseNumber(block.waitTimeUpdate, DEFAULTS.waitTimeUpdate, 0, 60000),
+      totalApiCallsPerMonth: parsePlatformNumber('totalApiCallsPerMonth', block.totalApiCallsPerMonth),
+      pollingInterval: parsePlatformNumber('pollingInterval', block.pollingInterval),
+      discoveryPollingInterval: parsePlatformNumber('discoveryPollingInterval', block.discoveryPollingInterval),
+      offlineInterval: parsePlatformNumber('offlineInterval', block.offlineInterval),
+      waitTimeUpdate: parsePlatformNumber('waitTimeUpdate', block.waitTimeUpdate),
     };
 
     const externalDoorConfig = sanitizeExternalDoorsConfig(block.externalDoors);
@@ -762,17 +773,19 @@
     return isCompleteDoor(sanitized) ? sanitized : null;
   }
 
-  function setPlatformField(target) {
+  // committed is true once the field is left: a number field then shows the value that is saved
+  function setPlatformField(target, committed = false) {
     const field = target.getAttribute('data-platform-field');
     if (!field) {
       return false;
     }
-    state.platformConfig[field] = target.value;
+    const isNumber = NUMBER_FIELDS.has(field);
+    state.platformConfig[field] = committed && isNumber ? parsePlatformNumber(field, target.value) : target.value;
     if (ACCOUNT_FIELDS.includes(field)) {
       markAccountCredentialsChanged();
     }
     scheduleUpdate();
-    return NUMBER_FIELDS.has(field);
+    return isNumber;
   }
 
   function setExternalDoorField(target) {
@@ -810,7 +823,7 @@
     let shouldRender = false;
 
     if (target?.matches?.('[data-platform-field]')) {
-      shouldRender = setPlatformField(target);
+      shouldRender = setPlatformField(target, true);
     } else if (target?.matches?.('[data-external-door-field]')) {
       shouldRender = setExternalDoorField(target);
     }
