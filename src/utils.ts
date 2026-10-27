@@ -13,18 +13,30 @@ export class SimpleMutex {
   private _locked = false;
   private _waiting: Array<() => void> = [];
 
+  // True while held, and while anyone waits for it
+  get locked(): boolean {
+    return this._locked;
+  }
+
   async acquire(): Promise<() => void> {
-    while (this._locked) {
+    if (this._locked) {
+      // Release hands the mutex straight to the next waiter, so waiters get it in order and nobody can take it
+      // in between
       await new Promise<void>(resolve => this._waiting.push(resolve));
+    } else {
+      this._locked = true;
     }
-    this._locked = true;
+    let released = false;
     return () => {
-      this._locked = false;
-      if (this._waiting.length > 0) {
-        const next = this._waiting.shift();
-        if (next) {
-          next();
-        }
+      if (released) {
+        return;
+      }
+      released = true;
+      const next = this._waiting.shift();
+      if (next) {
+        next();
+      } else {
+        this._locked = false;
       }
     };
   }
@@ -37,21 +49,38 @@ export function deferAndCombine<T, U>(
 ): (arg?: U) => Promise<T> {
   let requests: { resolve: (value: T) => void; reject: (reason?: unknown) => void }[] = [];
   let timer: NodeJS.Timeout | null = null;
+  let running = false;
+
+  const schedule = () => {
+    if (!timer && !running) {
+      timer = setTimeout(processRequests, timeout);
+    }
+  };
 
   const processRequests = () => {
+    timer = null;
+    running = true;
     const currentRequests = requests;
     requests = [];
     let result: Promise<T>;
-    if (fn.length === 0) {
-      result = (fn as () => Promise<T>)();
-    } else {
-      result = (fn as (requestCount: number) => Promise<T>)(currentRequests.length);
+    try {
+      if (fn.length === 0) {
+        result = (fn as () => Promise<T>)();
+      } else {
+        result = (fn as (requestCount: number) => Promise<T>)(currentRequests.length);
+      }
+    } catch (error) {
+      result = Promise.reject(error);
     }
+    // One run at a time: requests that arrive while fn is running wait for it to settle, then get their own run.
     result
       .then(value => currentRequests.forEach(req => req.resolve(value)))
       .catch(error => currentRequests.forEach(req => req.reject(error)))
       .finally(() => {
-        timer = null;
+        running = false;
+        if (requests.length > 0) {
+          schedule();
+        }
       });
   };
 
@@ -62,10 +91,7 @@ export function deferAndCombine<T, U>(
 
     return new Promise<T>((resolve, reject) => {
       requests.push({ resolve, reject });
-
-      if (!timer) {
-        timer = setTimeout(processRequests, timeout);
-      }
+      schedule();
     });
   };
 }
@@ -74,7 +100,13 @@ export function isObjectLike(candidate: unknown): candidate is Record<string, un
   return typeof candidate === 'object' && candidate !== null || typeof candidate === 'function';
 }
 
-export async function loadPackageConfig(logger: Logging): Promise<{ name: string; version: string; engines: { node: string } }> {
+export interface PackageConfig {
+  name: string;
+  version: string;
+  engines: { homebridge: string; node: string };
+}
+
+export async function loadPackageConfig(logger: Logging): Promise<PackageConfig> {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const packageConfigPath = path.join(__dirname, '..', 'package.json');
   const log: Logger = prefixLogger(logger, '[Package Config]');

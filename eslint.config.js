@@ -22,22 +22,12 @@ const tsRecommendedConfigs = tseslint.configs.recommended.map(config => ({
 }));
 
 const sharedRules = {
-  'brace-style': 'off',
-  'comma-dangle': 'off',
-  'comma-spacing': 'off',
   'curly': ['error', 'all'],
   'dot-notation': 'off',
   'eqeqeq': 'error',
-  'indent': 'off',
-  'lines-between-class-members': 'off',
-  'max-len': 'off',
   'no-console': 'error',
   'no-constant-condition': 'off',
-  'no-multi-spaces': 'off',
-  'no-trailing-spaces': 'off',
   'prefer-arrow-callback': 'error',
-  'quotes': 'off',
-  'semi': 'off',
   '@stylistic/brace-style': 'error',
   '@stylistic/comma-dangle': ['error', 'always-multiline'],
   '@stylistic/comma-spacing': 'error',

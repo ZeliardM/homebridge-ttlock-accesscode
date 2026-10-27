@@ -6,6 +6,9 @@ export function buildLockDescriptors(
   C: typeof Characteristic,
   setTarget: (value: number | CharacteristicValue, context: DescriptorContext) => Promise<boolean | void>,
 ): CharacteristicDescriptor[] {
+  // LockTargetState only accepts SECURED or UNSECURED; the current state can also be JAMMED or UNKNOWN
+  const targetFromState = (state: number | undefined) =>
+    state === C.LockTargetState.UNSECURED ? C.LockTargetState.UNSECURED : C.LockTargetState.SECURED;
   return [
     {
       type: C.LockCurrentState,
@@ -13,8 +16,9 @@ export function buildLockDescriptors(
       writable: false,
       syncGroup: 'lockState',
       syncHomeKitValueAfterSet: true,
-      getInitial: context => context!.device.state ?? C.LockCurrentState.SECURED,
-      getCurrent: context => context!.device.state ?? C.LockCurrentState.SECURED,
+      // A lock whose state has not been read is not shown as locked
+      getInitial: context => context.device.state ?? C.LockCurrentState.UNKNOWN,
+      getCurrent: context => context.device.state ?? C.LockCurrentState.UNKNOWN,
     },
     {
       type: C.LockTargetState,
@@ -22,8 +26,10 @@ export function buildLockDescriptors(
       writable: true,
       syncGroup: 'lockState',
       syncHomeKitValueAfterSet: true,
-      getInitial: context => context!.device.state ?? C.LockTargetState.SECURED,
-      getCurrent: context => context!.device.state ?? C.LockTargetState.SECURED,
+      getInitial: context => targetFromState(context.device.state),
+      getCurrent: context => targetFromState(context.device.state),
+      applySetInBackground: true,
+      describeSet: value => Number(value) === C.LockTargetState.SECURED ? 'lock' : 'unlock',
       applySet: async (value, context) => {
         const applied = await setTarget(Number(value), context);
         if (applied === false) {
@@ -41,20 +47,20 @@ export function buildBatteryDescriptors(C: typeof Characteristic): Characteristi
       type: C.BatteryLevel,
       name: 'BatteryLevel',
       writable: false,
-      getInitial: context => context!.device.battery ?? 100,
-      getCurrent: context => context!.device.battery ?? 100,
+      getInitial: context => context.device.battery ?? 100,
+      getCurrent: context => context.device.battery ?? 100,
     },
     {
       type: C.StatusLowBattery,
       name: 'StatusLowBattery',
       writable: false,
       getInitial: context => {
-        return (context!.device.battery < 20)
+        return (context.device.battery < 20)
           ? C.StatusLowBattery.BATTERY_LEVEL_LOW
           : C.StatusLowBattery.BATTERY_LEVEL_NORMAL;
       },
       getCurrent: context => {
-        return (context!.device.battery < 20)
+        return (context.device.battery < 20)
           ? C.StatusLowBattery.BATTERY_LEVEL_LOW
           : C.StatusLowBattery.BATTERY_LEVEL_NORMAL;
       },

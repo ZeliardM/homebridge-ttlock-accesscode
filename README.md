@@ -25,7 +25,7 @@ This plug-in lets you control TTLock locks in the Apple Home app with lock/unloc
 
 ## Requirements
 - Homebridge Supported Versions: 1.11.2 or later, including Homebridge 2.x.
-- Node.js Supported Versions: 22 and 24.
+- Node.js Supported Versions: 22, 24, and 26.
 - TTLock Smart Lock.
 - TTLock Gateway for non-Wi-Fi locks.
 - Remote Unlock enabled in the TTLock mobile app.
@@ -38,8 +38,6 @@ This plug-in lets you control TTLock locks in the Apple Home app with lock/unloc
 - Get the status of your TTLock devices.
 - Lock and unlock your TTLock devices.
 - Manage passcodes for your TTLock devices in Apple Home.
-- Expose optional manual doors from IKEA DIRIGERA open/close sensors.
-- Block linked TTLock lock/unlock commands when a manual door is open or unavailable.
 - Automatic API usage protection with adaptive polling.
 - Periodic discovery and offline recovery handling.
 
@@ -58,26 +56,14 @@ npm install -g homebridge-ttlock-accesscode
 - For non-Wi-Fi locks, make sure your gateway is online and near the lock.
 - The default settings are tuned for TTLock's monthly API limits.
 - Polling is automatically slowed when monthly allowance gets lower.
-- Manual door DIRIGERA polling is local to the hub and does not count against TTLock API usage.
-- The Homebridge UI can test TTLock credentials, discover TTLock locks, pair DIRIGERA hubs, and list supported sensors.
+- The last 1% of the monthly allowance (at least 50 calls) is kept for locking, unlocking and access codes. When only that is left, polling and discovery pause until the month ends.
+- The Homebridge UI can test your TTLock credentials and shows how many locks the account can see.
 
 ## Access Code Notes
 - Access code support is exposed through the Apple Home App.
-- Existing passcodes are loaded from TTLock and mapped into the Apple Home App.
+- Permanent access codes, and period access codes while their period runs, are loaded from TTLock and shown in the Apple Home App. One-time, erase and cyclic codes, and period codes outside their period, are not shown.
+- Access codes added from the Apple Home App are permanent codes.
 - Add/Delete/List/Read flows are handled through the Apple Home App.
-
-## Manual Door Notes
-- Manual doors are optional and are configured under `externalDoors`.
-- Only IKEA DIRIGERA open/close sensors are supported at this time.
-- Add paired DIRIGERA hubs under `externalDoors.hubs`.
-- Add HomeKit doors under `externalDoors.doors`.
-- Remove a hub or door when you no longer want those manual door accessories exposed.
-- Door accessory IDs are generated from `externalDoors.doors[].name`. Renaming a door creates a new HomeKit door accessory and removes the old cached one.
-- The DIRIGERA open/close sensor is not exposed as a separate HomeKit contact sensor. The plugin exposes a HomeKit Door service only.
-- Manual doors cannot be opened or closed from HomeKit. HomeKit door position follows the DIRIGERA sensor state.
-- Each manual door requires `sensor`, set to the DIRIGERA open/close sensor ID, and `lock`, set to the TTLock `device_id`/lock ID protected by that door.
-- In the Homebridge UI, use the discovered TTLock lock list when linking a manual door.
-- When a linked manual door is open, unknown, or unavailable, lock and unlock commands for that TTLock lock are ignored.
 
 ## Example Configuration
 ```json
@@ -101,30 +87,22 @@ npm install -g homebridge-ttlock-accesscode
       "pollingInterval": 300,
       "discoveryPollingInterval": 12,
       "offlineInterval": 7,
-      "waitTimeUpdate": 100,
-      "externalDoors": {
-        "doorPollingInterval": 60,
-        "hubs": [
-          {
-            "ip": "192.168.1.50",
-            "accessToken": "DIRIGERA_ACCESS_TOKEN"
-          }
-        ],
-        "doors": [
-          {
-            "name": "Front Door",
-            "sensor": "IKEA_CONTACT_SENSOR_ID",
-            "lock": "TTLOCK_LOCK_ID"
-          }
-        ]
-      }
+      "waitTimeUpdate": 100
     }
   ],
   "accessories": []
 }
 ```
 
+## Upgrading From 2.x
+- Version 3 removes the optional IKEA DIRIGERA doors (`externalDoors`) and the lock and unlock block that went with them.
+- Door accessories created by earlier versions are removed from HomeKit when Homebridge starts, together with any automations that used them.
+- An `externalDoors` setting left in the config is ignored and logs a warning at startup. Remove it to stop the warning; saving a change in the plugin settings also removes it.
+
 ## Known Limitations
 - Apple HomeKey is not supported by TTLock readers.
-- Gateway-dependent locks will return gateway-offline conditions if the gateway is unavailable.
+- A lock that does not answer three polls in a row, for example because its gateway is offline, shows No Response in Apple Home. Polling continues, and the lock shows its state again as soon as a poll reaches it.
+- After Homebridge starts, a lock answers No Response to lock, unlock and access code requests until the plugin has found it in TTLock.
+- Lock and unlock are answered at once and sent to TTLock in the background. If a command fails, or cannot be sent in time to finish within 60 seconds of the request, Apple Home goes back to the lock's last known state. A command that could not be sent in time is not sent later.
+- Adding or deleting an access code goes through the gateway and can take longer than the roughly 9 seconds Apple Home waits. Apple Home may then report a failure even though the change was made; open the lock's access codes again to see the current list. A change that cannot be sent within those 9 seconds is not sent.
 - TTLock Cloud API limits and behavior can change without notice.

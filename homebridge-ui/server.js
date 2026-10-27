@@ -35,12 +35,20 @@ function requestError(message, status = 400) {
   return new RequestError(message, { status });
 }
 
-function getRequiredString(payload, field, label) {
-  const value = String(payload?.[field] ?? '').trim();
-  if (!value) {
+// plugin-ui-utils writes any error that is not a RequestError to the log with console.error, and a raw
+// error can carry the request with the client secret, password hash or access token. Pass on the message only.
+function toRequestError(error) {
+  return error instanceof RequestError ? error : requestError(error instanceof Error ? error.message : String(error), 500);
+}
+
+// trim: false for the client secret and password, which are used exactly as typed (spaces at either end can be
+// part of them); a value of only spaces still counts as missing
+function getRequiredString(payload, field, label, { trim = true } = {}) {
+  const value = String(payload?.[field] ?? '');
+  if (!value.trim()) {
     throw requestError(`${label} is required.`);
   }
-  return value;
+  return trim ? value.trim() : value;
 }
 
 async function importBuiltModule(modulePath) {
@@ -54,23 +62,13 @@ async function importBuiltModule(modulePath) {
 
 async function createTTLockApi(payload) {
   const clientId = getRequiredString(payload, 'clientId', 'TTLock Client ID');
-  const clientSecret = getRequiredString(payload, 'clientSecret', 'TTLock Client Secret');
+  const clientSecret = getRequiredString(payload, 'clientSecret', 'TTLock Client Secret', { trim: false });
   const username = getRequiredString(payload, 'username', 'TTLock username');
-  const password = getRequiredString(payload, 'password', 'TTLock password');
+  const password = getRequiredString(payload, 'password', 'TTLock password', { trim: false });
   const { TTLockApi } = await importBuiltModule(['api', 'ttlockApi.js']);
   const api = new TTLockApi(new StreamLogger(), clientId, clientSecret);
   await api.authenticate(username, password);
   return api;
-}
-
-async function createDirigeraClient(payload) {
-  const gatewayIP = getRequiredString(payload, 'gatewayIP', 'DIRIGERA gateway IP');
-  const { createDirigeraClient } = await import('dirigera');
-
-  return createDirigeraClient({
-    gatewayIP,
-    accessToken: payload?.accessToken,
-  });
 }
 
 class TTLockAccessCodeUiServer extends HomebridgePluginUiServer {
@@ -79,43 +77,26 @@ class TTLockAccessCodeUiServer extends HomebridgePluginUiServer {
 
     this.onRequest('/ttlock-test-auth', this.testTTLockAuth.bind(this));
     this.onRequest('/ttlock-locks', this.listTTLockLocks.bind(this));
-    this.onRequest('/dirigera-authenticate', this.authenticateDirigera.bind(this));
-    this.onRequest('/dirigera-open-close-sensors', this.listDirigeraOpenCloseSensors.bind(this));
 
     this.ready();
   }
 
   async testTTLockAuth(payload) {
-    await createTTLockApi(payload);
-    return { ok: true };
+    try {
+      await createTTLockApi(payload);
+      return { ok: true };
+    } catch (error) {
+      throw toRequestError(error);
+    }
   }
 
   async listTTLockLocks(payload) {
-    const api = await createTTLockApi(payload);
-    return api.listLocksForSetup();
-  }
-
-  async authenticateDirigera(payload) {
-    const client = await createDirigeraClient(payload);
-    const accessToken = await client.authenticate({ verbose: false });
-    return { accessToken };
-  }
-
-  async listDirigeraOpenCloseSensors(payload) {
-    const accessToken = getRequiredString(payload, 'accessToken', 'DIRIGERA access token');
-    const client = await createDirigeraClient({ ...payload, accessToken });
-    const sensors = await client.openCloseSensors.list();
-
-    return sensors.map((sensor) => ({
-      batteryPercentage: sensor.attributes?.batteryPercentage,
-      id: sensor.id,
-      isOpen: sensor.attributes?.isOpen,
-      isReachable: Boolean(sensor.isReachable),
-      manufacturer: sensor.attributes?.manufacturer || '',
-      model: sensor.attributes?.model || '',
-      name: sensor.attributes?.customName || sensor.attributes?.model || sensor.id,
-      roomName: sensor.room?.name || '',
-    }));
+    try {
+      const api = await createTTLockApi(payload);
+      return await api.listLocksForSetup();
+    } catch (error) {
+      throw toRequestError(error);
+    }
   }
 }
 
