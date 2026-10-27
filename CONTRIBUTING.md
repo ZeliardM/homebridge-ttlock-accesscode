@@ -48,8 +48,8 @@ Thank you for contributing to homebridge-ttlock-accesscode!
 ## Labels
 Labels pick the CHANGELOG section and the version bump. When a PR is opened and on every push to it, the PR workflow clears its labels and sets them again from the branch name and the changed files, so labels added by hand do not last:
 - `feat/...` or `feature/...` -> enhancement (minor version)
-- `fix/...` or `hotfix/...` -> fix (patch)
-- `bug/...` -> bug (patch)
+- `fix/...`, `hotfix/...` or `<name>/fix-...` -> fix (patch)
+- `bug/...` or `<name>/bug-...` -> bug (patch)
 - a branch name containing `breaking` -> breaking-change (major); the PR body then needs the breaking change explanation from the PR template.
 - Changed files add docs (`*.md`), dependency (`package.json`, `package-lock.json`) and workflow (`.github/`).
 
