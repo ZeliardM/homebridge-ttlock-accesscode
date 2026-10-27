@@ -259,6 +259,34 @@ export class UsageTracker extends EventEmitter {
     }
   }
 
+  // At the end of a discovery: the calls it reserved but did not make (it failed or found fewer locks) are no longer
+  // counted. Left in the pool, polls would make them without the reserve check. A reserved call is taken from the pool
+  // only right before it is sent, so these were never attempted.
+  public async endBatch(): Promise<void> {
+    const release = await this.mutex.acquire();
+    try {
+      await this.rolloverIfNeededLocked();
+      if (this.releasePendingLocked()) {
+        await this.persist();
+        this.updateTier();
+      }
+    } finally {
+      release();
+    }
+  }
+
+  private releasePendingLocked(): boolean {
+    if (!this.state || this.pendingReserved === 0) {
+      return false;
+    }
+    const unused = this.pendingReserved;
+    this.state.used = Math.max(0, this.state.used - unused);
+    this.pendingReserved = 0;
+    this.state.lastUpdatedISO = new Date().toISOString();
+    this.log.debug(`Released ${unused} reserved calls that were not made. New used=${this.state.used}`);
+    return true;
+  }
+
   // Polls and discovery stop short of the user reserve, so HomeKit can still lock, unlock and change access codes once
   // they have used up the rest of the month's calls
   private fitsLocked(n: number, priority: ApiCallPriority): boolean {
@@ -359,6 +387,9 @@ export class UsageTracker extends EventEmitter {
     }
     const release = await this.mutex.acquire();
     try {
+      // A discovery cut off by shutdown ends after this, too late to save its release. Shutdown stops the TTLock API
+      // first, so no request takes from the reservation any more.
+      this.releasePendingLocked();
       await this.persist();
     } finally {
       release();

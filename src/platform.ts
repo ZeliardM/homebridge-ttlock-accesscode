@@ -456,7 +456,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
           this.log.debug('Error reserving budget for initial discovery', error);
         }
         this.discoveryStartedAt = performance.now();
-        await this.deviceManager.discoverDevices(undefined, this.discoveryPriority());
+        try {
+          await this.deviceManager.discoverDevices(undefined, this.discoveryPriority());
+        } finally {
+          await this.usageTracker?.endBatch();
+        }
         await this.waitForDiscoveredDevices();
         this.discoveryCompleted = true;
       }
@@ -510,7 +514,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
           this.log.debug('Error reserving budget for periodic discovery', error);
         }
         this.discoveryStartedAt = performance.now();
-        await this.deviceManager.discoverDevices(skipStateFor, priority);
+        try {
+          await this.deviceManager.discoverDevices(skipStateFor, priority);
+        } finally {
+          await this.usageTracker?.endBatch();
+        }
         await this.waitForDiscoveredDevices();
         discoverySucceeded = true;
         this.discoveryCompleted = true;
