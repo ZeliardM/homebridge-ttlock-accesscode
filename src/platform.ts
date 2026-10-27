@@ -882,6 +882,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
       accessory.context.offline = false;
     }
 
+    // Also for a lock moved to offlineAccessories below: it stays in HomeKit when the config is invalid or
+    // initialization failed
+    this.refuseWritesUntilFound(accessory);
+
     if (accessory.context.lastSeen) {
       const now = new Date();
       const timeSinceLastSeen = now.getTime() - new Date(accessory.context.lastSeen).getTime();
@@ -905,8 +909,6 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.updateAccessoryStatus(accessory, now, false);
       }
     }
-
-    this.refuseWritesUntilFound(accessory);
 
     if (!this.configuredAccessories.has(accessory.UUID)) {
       this.log.debug(
