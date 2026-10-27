@@ -317,13 +317,19 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     return value.readUInt8(0);
   }
 
+  // The identifier is the first inner item: tag 01, little-endian. Any other first item is turned down without its
+  // bytes, which can hold an access code when the request is out of order.
   private parseIdentifierRequest(element: { value: Buffer }, requestType: string): number {
     const request = this.parseTlv(element.value, `${requestType} request`);
     const identifierRecord = request[0];
     if (!identifierRecord) {
       throw new AccessCodeProtocolError(`${requestType} request is missing its passcode identifier`);
     }
-    const bytes = identifierRecord.value;
+    // ber-tlv gives a constructed item a null value
+    const bytes: Buffer | null = identifierRecord.value;
+    if (identifierRecord.tag !== '01' || !Buffer.isBuffer(bytes)) {
+      throw new AccessCodeProtocolError(`${requestType} request does not hold a passcode identifier where one belongs`);
+    }
     if (bytes.length === 0) {
       throw new AccessCodeProtocolError(`${requestType} request contained an empty passcode identifier`);
     }
@@ -336,6 +342,12 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       throw new AccessCodeProtocolError(`${requestType} request contained a passcode identifier that is too large`);
     }
     return bytes.readUIntLE(0, length);
+  }
+
+  // Whether HomeKit was ever given this identifier. Only those are named in the log: any other number can be the bytes
+  // of an access code that a request put where an identifier belongs.
+  private wasGivenOut(identifier: number): boolean {
+    return identifier < (this.homebridgeAccessory.context.nextPasscodeIdentifier ?? 0);
   }
 
   private parsePasscodeRequest(element: { value: Buffer }): string {
@@ -391,7 +403,11 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       const passcodeIdentifier = this.parseIdentifierRequest(element, 'Read');
       const passcode = this.findPasscodeByIdentifier(passcodes, passcodeIdentifier);
       if (!passcode) {
-        throw new AccessCodeProtocolError(`Passcode identifier ${passcodeIdentifier} was not found for read`);
+        throw new AccessCodeProtocolError(
+          this.wasGivenOut(passcodeIdentifier)
+            ? `Passcode identifier ${passcodeIdentifier} was not found for read`
+            : 'Read request names a passcode identifier that was never given out',
+        );
       }
       this.log.debug(`Reading passcode id ${passcode.passcode_id} on ${this.name}`);
       return this.buildPasscodeResponseRecord(passcode);
@@ -488,18 +504,33 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       if (!passcode) {
         // Already gone: deleted in the TTLock app, or by an earlier Remove that failed on a later code. The others
         // are still deleted, so a Remove sent again after a failure deletes the codes that are left.
-        this.log.debug(`Passcode identifier ${identifier} is no longer on ${this.name}; nothing to delete for it`);
+        this.log.debug(
+          this.wasGivenOut(identifier)
+            ? `Passcode identifier ${identifier} is no longer on ${this.name}; nothing to delete for it`
+            : `A Delete request on ${this.name} names a passcode identifier that was never given out; nothing to delete for it`,
+        );
         continue;
       }
       // Built first: once the code is deleted, its identifier is let go
       targets.set(passcode.passcode_id, { passcode, record: this.buildPasscodeResponseRecord(passcode) });
     }
     if (targets.size === 0) {
-      throw new AccessCodeProtocolError(
-        identifiers.length === 1
-          ? `Passcode identifier ${identifiers[0]} was not found for delete`
-          : `None of the passcode identifiers ${identifiers.join(', ')} were found for delete`,
-      );
+      const named = identifiers.filter(identifier => this.wasGivenOut(identifier));
+      const neverGivenOut = identifiers.length - named.length;
+      if (identifiers.length === 1) {
+        throw new AccessCodeProtocolError(
+          named.length === 1
+            ? `Passcode identifier ${named[0]} was not found for delete`
+            : 'Delete request names a passcode identifier that was never given out',
+        );
+      }
+      if (named.length === 0) {
+        throw new AccessCodeProtocolError(`None of the ${neverGivenOut} passcode identifiers in the Delete request were ever given out`);
+      }
+      const others = neverGivenOut === 0 ? '' : neverGivenOut === 1
+        ? ', and another was never given out'
+        : `, and ${neverGivenOut} more were never given out`;
+      throw new AccessCodeProtocolError(`None of the passcode identifiers ${named.join(', ')} were found for delete${others}`);
     }
     const records: string[] = [];
     for (const { passcode, record } of targets.values()) {
