@@ -1036,6 +1036,7 @@ export class TTLockApi {
     const state = this.toHomeKitLockState(stateResponse?.state);
     if (state !== undefined) {
       sysInfo.state = state;
+      this.recordDiscoveryStateRead(String(lockId), typeof stateResponse?.electricQuantity === 'number');
     }
     return sysInfo;
   }
@@ -1055,9 +1056,15 @@ export class TTLockApi {
   // A busy gateway or a lock it briefly cannot reach must not drop the lock until the next discovery (12h by
   // default). Return undefined instead, so the lock is kept and the next poll fills in its state. Not retried:
   // the lock's polls read the state again anyway, and retries would hold up the rest of discovery.
-  private async queryStateForDiscovery(lockId: string, priority: ApiCallPriority): Promise<{ state: number } | undefined> {
+  private async queryStateForDiscovery(
+    lockId: string,
+    priority: ApiCallPriority,
+  ): Promise<{ state: number; electricQuantity?: number } | undefined> {
     try {
-      return await this.makeAuthenticatedRequest<{ state: number }>('lock/queryOpenState', 'GET', { lockId }, { retry: 'none', priority });
+      return await this.makeAuthenticatedRequest<{
+        state: number;
+        electricQuantity?: number;
+      }>('lock/queryOpenState', 'GET', { lockId }, { retry: 'none', priority });
     } catch (error) {
       const temporary = error instanceof TTLockApiError && (
         error.gatewayTransient ||
@@ -1141,13 +1148,25 @@ export class TTLockApi {
     this.recentPollsWithBattery.set(lockId, polls);
   }
 
+  // Discovery's lock/queryOpenState is the request a poll starts with, so its answer shows whether this lock's polls
+  // take one call or two. A lock not polled yet gets it as every poll of its window, so polling is paced for it from
+  // the first round instead of coming down over POLL_CALLS_WINDOW polls; a lock already polled gets it as one more poll.
+  // Only this read counts: lock/list also has a battery level, but that does not show that lock/queryOpenState has one.
+  private recordDiscoveryStateRead(lockId: string, withBattery: boolean): void {
+    if ((this.recentPollsWithBattery.get(lockId) ?? []).length > 0) {
+      this.recordPollCalls(lockId, withBattery);
+      return;
+    }
+    this.recentPollsWithBattery.set(lockId, new Array<boolean>(POLL_CALLS_WINDOW).fill(withBattery));
+  }
+
   // The API calls one poll of each of these locks takes, added up; polling is paced from it. Each lock counts as one
   // call plus the share of its last POLL_CALLS_WINDOW polls that took a second call, so the sum can be a fraction.
-  // Polls a lock has not had yet count as taking two calls, so a lock not polled yet counts as two and polling never
-  // starts out faster than the budget allows. A lock whose battery level comes and goes moves the sum by at most
-  // 1/POLL_CALLS_WINDOW at each poll instead of by a whole call, so it rarely puts the interval of every lock well
-  // off. The other side: a lock that from now on always takes two calls counts as two only after POLL_CALLS_WINDOW
-  // polls.
+  // Polls a lock has not had yet count as taking two calls, so a lock that neither discovery nor a poll has read counts
+  // as two, and no lock counts as less until a read has shown that its polls take one call. A lock whose battery level
+  // comes and goes moves the sum by at most 1/POLL_CALLS_WINDOW at each poll instead of by a whole call, so it rarely
+  // puts the interval of every lock well off. The other side: a lock that from now on always takes two calls counts as
+  // two only after POLL_CALLS_WINDOW polls.
   public estimatePollCalls(lockIds: readonly string[]): number {
     return lockIds.reduce((calls, lockId) => {
       const pollsWithBattery = (this.recentPollsWithBattery.get(lockId) ?? []).filter(withBattery => withBattery).length;

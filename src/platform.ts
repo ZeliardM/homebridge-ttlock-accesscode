@@ -779,9 +779,9 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const discoveryCallsPerDay = (1 + 2 * deviceCount) * 86400000 / this.config.discoveryOptions.discoveryPollingInterval;
     const pollingBudgetPerDay = Math.max(0, Math.floor(remainingDailyAllowance * 0.8 - discoveryCallsPerDay));
     // A poll is lock/queryOpenState, which also returns the battery level; a lock that leaves it out takes a second call.
-    // Each lock counts as one call plus the share of its recent polls that took two, and polls it has not had yet count
-    // as two (see TTLockApi.estimatePollCalls), so polling never starts out faster than the budget allows. A lock
-    // without a known id counts as two.
+    // Each lock counts as one call plus the share of its recent polls that took two; discovery's read of its state counts
+    // as its polls until it has had its own, and polls it has not had yet count as two (see TTLockApi.estimatePollCalls),
+    // so no lock counts as one call before a read has shown it. A lock without a known id counts as two.
     const lockIds = this.getTTLockDeviceIds();
     const lockPollCalls = this.ttLockApi?.estimatePollCalls(lockIds) ?? 2 * lockIds.length;
     const estimatedCallsPerPoll = Math.max(1, lockPollCalls + 2 * Math.max(0, deviceCount - lockIds.length));
@@ -831,9 +831,9 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   // locks take a second call, and the daily allowance changes during the month. Polling is scheduled again only when
   // the interval worked out now is well off the one in use, so at most once a round. Each poll moves the calls a
   // round is paced for by only a fraction of a call (see TTLockApi.estimatePollCalls), so a lock whose battery level
-  // comes and goes seldom puts the interval well off, though with one or two locks it still does now and then. After
-  // startup, when every lock counts as two calls, the interval comes down in steps over about eight polls of each lock
-  // as they show which locks take one.
+  // comes and goes seldom puts the interval well off, though with one or two locks it still does now and then. The
+  // first round is already paced from what discovery read of each lock; only a lock whose state discovery could not
+  // read starts out as two calls and comes down in steps over about eight of its polls.
   private schedulePollingIntervalCheck(round: PollingRound, rounds: number): void {
     this.clearPollingIntervalCheck();
     if (this.isShuttingDown) {
