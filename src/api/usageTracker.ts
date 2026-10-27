@@ -43,6 +43,15 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// EPERM or EACCES on moving or replacing the usage file most often means that it or its folder belongs to another user
+// (Homebridge once run as root, for example), though an immutable file or some mounts refuse it too
+function ownershipHint(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'EPERM' || code === 'EACCES'
+    ? '. The usage file or its folder may belong to another user, which must be fixed for API usage to be saved'
+    : '';
+}
+
 export class UsageTracker extends EventEmitter {
   private storageFilePath: string | undefined;
   private state: StoredUsage | null = null;
@@ -227,7 +236,8 @@ export class UsageTracker extends EventEmitter {
         if (asidePath) {
           await this.moveAsideFileBack(asidePath, this.storageFilePath);
         }
-        throw err;
+        const hint = ownershipHint(err);
+        throw hint ? new Error(`${errorText(err)}${hint}`, { cause: err }) : err;
       }
       if (asidePath) {
         const what = this.unusableFile === 'unreadable' ? 'could not be read' : 'did not hold valid usage';
@@ -259,13 +269,9 @@ export class UsageTracker extends EventEmitter {
     try {
       await fs.rename(filePath, asidePath);
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (code !== 'ENOENT') {
-        const owner = code === 'EPERM' || code === 'EACCES'
-          ? '. The usage file or its folder belongs to another user; that must be fixed for API usage to be saved'
-          : '';
+      if ((err as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') {
         throw new Error(
-          `could not move the API usage file aside to ${asidePath}: ${errorText(err)}${owner}`,
+          `could not move the API usage file aside to ${asidePath}: ${errorText(err)}${ownershipHint(err)}`,
           { cause: err },
         );
       }
