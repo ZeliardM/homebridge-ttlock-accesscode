@@ -44,6 +44,7 @@ export default abstract class HomeKitDevice {
   private unknownStatePollTimer: NodeJS.Timeout | undefined;
   // Raised whenever polling stops or is scheduled again, so a poll still running from before sets no timer
   private pollingGeneration = 0;
+  // The interval all locks poll at (see platform.getPollingRound), as it was when this lock's polling was scheduled
   private pollingIntervalMs = 0;
   // performance.now() when the next scheduled poll is due
   private nextPollDueAt = 0;
@@ -247,14 +248,20 @@ export default abstract class HomeKitDevice {
       return;
     }
     this.clearPollingTimers();
-    const effectiveInterval = this.computePollingInterval();
-    this.pollingIntervalMs = effectiveInterval;
+    const { intervalMs, startedAt } = this.platform.getPollingRound();
+    this.pollingIntervalMs = intervalMs;
     // Spread the locks' polls across the interval: locks sharing a gateway that are polled at the same
     // moment make the gateway answer "busy". Every lock still gets its first poll within one interval.
     const { index, count } = this.platform.getPollingSlot(this.ttlockDevice.sys_info.device_id);
-    const firstPollDelay = Math.floor((effectiveInterval * (index + 1)) / count);
-    this.log.debug(`Starting polling with interval ${effectiveInterval}ms, first poll in ${firstPollDelay}ms`);
-    this.schedulePoll(performance.now() + firstPollDelay, this.pollingGeneration);
+    const now = performance.now();
+    let firstPollAt = startedAt + Math.floor((intervalMs * (index + 1)) / count);
+    if (firstPollAt < now) {
+      // A lock found after the round started whose slot has passed: its slot in a later round
+      firstPollAt += Math.ceil((now - firstPollAt) / intervalMs) * intervalMs;
+    }
+    const firstPollDelay = firstPollAt - now;
+    this.log.debug(`Starting polling with interval ${intervalMs}ms, first poll in ${Math.round(firstPollDelay)}ms`);
+    this.schedulePoll(firstPollAt, this.pollingGeneration);
     // HomeKit shows the lock as Unknown (discovery could not read its state, or TTLock did not know it): read it soon
     // rather than at the slot. Still staggered, because locks that share a gateway and are polled together find it busy.
     if (!this.isLockStateKnown()) {
@@ -287,16 +294,9 @@ export default abstract class HomeKitDevice {
     }, delay);
   }
 
-  private computePollingInterval(): number {
-    return this.platform.computeEffectivePollingInterval(
-      this.platform.getTTLockAccessoryCount(),
-      this.platform.config.discoveryOptions.pollingInterval,
-    );
-  }
-
-  // When a scheduled poll is done, the interval is worked out again before the next one is set: polls show which
-  // locks take a second call, and the daily allowance changes during the month. The next poll is due one interval
-  // after this one was due, not after it finished, so every lock keeps its slot.
+  // Polls at dueAt, and then every interval at the same slot. The interval is the one all locks share; only the
+  // platform changes it, by scheduling every lock's polling again (platform.reschedulePolling). The next poll is due
+  // one interval after this one was due, not after it finished, so the locks' polls stay the same distance apart.
   private schedulePoll(dueAt: number, generation: number): void {
     this.nextPollDueAt = dueAt;
     this.pollingTimer = setTimeout(() => {
@@ -306,11 +306,7 @@ export default abstract class HomeKitDevice {
           // Polling stopped or was scheduled again while the poll ran
           return;
         }
-        const interval = this.computePollingInterval();
-        if (interval !== this.pollingIntervalMs) {
-          this.log.debug(`Polling interval is now ${interval}ms`);
-          this.pollingIntervalMs = interval;
-        }
+        const interval = this.pollingIntervalMs;
         let nextDueAt = dueAt + interval;
         const now = performance.now();
         if (nextDueAt < now) {

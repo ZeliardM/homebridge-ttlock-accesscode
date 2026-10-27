@@ -53,6 +53,9 @@ export type ManualDoorAccessoryContext = {
 
 export type TTLockAccessCodeAccessoryContext = TTLockAccessoryContext | ManualDoorAccessoryContext;
 
+// The polling interval all locks share, and when the first round of polls at it started (performance.now())
+export type PollingRound = { intervalMs: number; startedAt: number };
+
 let packageConfig: PackageConfig;
 
 const TTLOCK_CREDENTIALS = {
@@ -69,6 +72,10 @@ const STARTUP_RETRY_MAX_MS = 5 * 60 * 1000;
 // last run have not been found, instead of the discovery interval (12 h by default). The last wait repeats while no
 // discovery has completed; locks that are not found are looked for only this many times.
 const DISCOVERY_RETRY_DELAYS_MS = [60 * 1000, 5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000];
+// Polling is scheduled again with a new interval once the interval worked out now is this much longer than the one
+// in use (polling faster than the budget allows) or this much shorter (polling slower than it needs to)
+const POLLING_INTERVAL_MAX_RISE = 0.10;
+const POLLING_INTERVAL_MAX_FALL = 0.25;
 
 export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   public readonly Characteristic: typeof Characteristic;
@@ -103,6 +110,10 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
   private startupRetry: { timer: NodeJS.Timeout; wake: () => void } | undefined;
   private usageTierChangedHandler: (() => void) | undefined;
   private usageMonthStartedHandler: (() => void) | undefined;
+  // Every lock polls at the same interval, at its own slot of each round (see getPollingRound)
+  private pollingRound: PollingRound | undefined;
+  // Checks the interval once a round (see schedulePollingIntervalCheck)
+  private pollingCheckTimer: NodeJS.Timeout | undefined;
 
   constructor(public readonly log: Logging, config: PlatformConfig, public readonly api: API) {
     this.Service = this.api.hap.Service;
@@ -164,6 +175,7 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         clearTimeout(this.discoveryRetryTimer);
         this.discoveryRetryTimer = undefined;
       }
+      this.clearPollingIntervalCheck();
       if (this.discoveryInterval) {
         clearInterval(this.discoveryInterval);
         this.log.debug('Cleared periodic device discovery interval');
@@ -792,6 +804,65 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     return Math.max(userIntervalMs, finalMs);
   }
 
+  private computePollingInterval(): number {
+    return this.computeEffectivePollingInterval(this.getTTLockAccessoryCount(), this.config.discoveryOptions.pollingInterval);
+  }
+
+  // The interval every lock polls at, and when the first round at it started. A lock polls at its own slot of each
+  // round (see getPollingSlot). With one interval for all locks the slots stay the same distance apart; locks that
+  // each worked out their own interval drifted into each other's slots, and a lock whose slot falls inside another
+  // lock's gateway request is skipped.
+  public getPollingRound(): PollingRound {
+    return this.pollingRound ?? this.startPollingRound();
+  }
+
+  private startPollingRound(): PollingRound {
+    const round = { intervalMs: this.computePollingInterval(), startedAt: performance.now() };
+    this.pollingRound = round;
+    this.log.debug(`Polling every ${round.intervalMs}ms`);
+    this.schedulePollingIntervalCheck(round, 1);
+    return round;
+  }
+
+  // Once a round, just after its last slot, when every lock has been polled at the interval in use: polls show which
+  // locks take a second call, and the daily allowance changes during the month. Polling is scheduled again only when
+  // the interval worked out now is well off the one in use, and the next check is a whole round after that, so a
+  // lock that only sometimes takes a second call does not keep moving every lock's slot.
+  private schedulePollingIntervalCheck(round: PollingRound, rounds: number): void {
+    this.clearPollingIntervalCheck();
+    if (this.isShuttingDown) {
+      return;
+    }
+    const slots = Math.max(1, this.getTTLockDeviceIds().length);
+    const checkAt = round.startedAt + rounds * round.intervalMs + Math.floor(round.intervalMs / (2 * slots));
+    this.pollingCheckTimer = setTimeout(() => {
+      this.pollingCheckTimer = undefined;
+      if (this.isShuttingDown || this.pollingRound !== round) {
+        return;
+      }
+      if (this.homekitDevicesById.size === 0) {
+        // Nothing polls; the next lock that starts polling starts a new round
+        this.pollingRound = undefined;
+        return;
+      }
+      const intervalMs = this.computePollingInterval();
+      if (intervalMs > round.intervalMs * (1 + POLLING_INTERVAL_MAX_RISE) ||
+        intervalMs < round.intervalMs * (1 - POLLING_INTERVAL_MAX_FALL)) {
+        this.log.debug(`The polling interval is now ${intervalMs}ms instead of ${round.intervalMs}ms`);
+        void this.reschedulePolling();
+      } else {
+        this.schedulePollingIntervalCheck(round, rounds + 1);
+      }
+    }, Math.max(0, checkAt - performance.now()));
+  }
+
+  private clearPollingIntervalCheck(): void {
+    if (this.pollingCheckTimer) {
+      clearTimeout(this.pollingCheckTimer);
+      this.pollingCheckTimer = undefined;
+    }
+  }
+
   // Position of a lock among all locks, used to spread their polls across the polling interval
   public getPollingSlot(deviceId: string): { index: number; count: number } {
     const deviceIds = this.getTTLockDeviceIds();
@@ -818,8 +889,13 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     }
   }
 
+  // A new round with the interval worked out now, for all locks at once so they keep their slots apart
   private async reschedulePolling(): Promise<void> {
+    if (this.isShuttingDown) {
+      return;
+    }
     this.log.debug('Rescheduling polling for all devices');
+    this.startPollingRound();
     for (const device of this.homekitDevicesById.values()) {
       try {
         await device.startPolling();
