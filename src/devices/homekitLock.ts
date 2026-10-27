@@ -296,12 +296,19 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     }
   }
 
-  private parseOperationType(decodedTlv: Array<{ value: Buffer }>): number {
+  // The operation is the first item: tag 01 with a one-byte value. Any other first item is turned down without
+  // its bytes, which can hold an access code when the request is out of order.
+  private parseOperationType(decodedTlv: Array<{ tag: string; value: Buffer | null }>): number {
     const operation = decodedTlv[0];
     if (!operation) {
       throw new AccessCodeProtocolError('Empty AccessCodeControlPoint request');
     }
-    return Number(operation.value.toString('hex'));
+    // ber-tlv gives a constructed item a null value
+    const value = operation.value;
+    if (operation.tag !== '01' || !Buffer.isBuffer(value) || value.length !== 1) {
+      throw new AccessCodeProtocolError('The request does not start with a one-byte operation');
+    }
+    return value.readUInt8(0);
   }
 
   private parseIdentifierRequest(element: { value: Buffer }, requestType: string): number {
@@ -526,7 +533,8 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       let requestType = '';
       let responseTlv = '';
 
-      switch (this.parseOperationType(decodedTlv)) {
+      const operation = this.parseOperationType(decodedTlv);
+      switch (operation) {
         case 1: {
           requestType = 'List';
           responseTlv = await this.buildListResponse(device);
@@ -548,7 +556,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
           break;
         }
         default:
-          throw new AccessCodeProtocolError(`Unsupported AccessCodeControlPoint operation: ${this.parseOperationType(decodedTlv)}`);
+          throw new AccessCodeProtocolError(`Unsupported AccessCodeControlPoint operation: ${operation}`);
       }
 
       this.log.info(`Access Code Control ${requestType} Request completed for ${this.name}`);
