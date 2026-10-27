@@ -1068,7 +1068,8 @@ export class TTLockApi {
     }
   }
 
-  public async getSysInfo(lockId: string): Promise<Partial<SysInfo>> {
+  // shouldYield: whether a HomeKit write for this lock is waiting for the poll to finish
+  public async getSysInfo(lockId: string, shouldYield?: () => boolean): Promise<Partial<SysInfo>> {
     this.log.debug(`Fetching sys_info for lock: ${lockId}`);
     // A failed poll is not retried: the next poll reads the lock again, and retries would hold up the lock's
     // commands, which wait for the poll to finish. Nor does it wait for the gateway: while another request uses
@@ -1094,6 +1095,11 @@ export class TTLockApi {
     let electricQuantity: unknown = stateResponse.electricQuantity;
     if (typeof electricQuantity === 'number') {
       this.locksPolledWithBatteryCall.delete(lockId);
+    } else if (shouldYield?.()) {
+      // A second gateway request would hold up the waiting write by up to the gateway timeout, enough for a lock
+      // command to miss its time limit. The state was read; keep the last known battery level.
+      this.locksPolledWithBatteryCall.add(lockId);
+      this.log.debug(`Not reading the battery level of lock ${lockId} now: a HomeKit command for it is waiting`);
     } else {
       this.locksPolledWithBatteryCall.add(lockId);
       try {

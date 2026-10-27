@@ -213,9 +213,9 @@ export default class DeviceManager {
     }
   }
 
-  async getSysInfo(deviceId: string): Promise<Partial<SysInfo>> {
+  async getSysInfo(deviceId: string, shouldYield?: () => boolean): Promise<Partial<SysInfo>> {
     try {
-      return await this.api.getSysInfo(deviceId);
+      return await this.api.getSysInfo(deviceId, shouldYield);
     } catch (error) {
       // The lock logs a failed poll; a poll skipped because the gateway was busy is not an error
       if (!(error instanceof TTLockApiError && error.skipped)) {

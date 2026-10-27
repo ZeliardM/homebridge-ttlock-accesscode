@@ -51,6 +51,8 @@ export default abstract class HomeKitDevice {
   private removedFromPlatform = false;
   // performance.now() when this lock's last HomeKit write started or ended
   private lastWriteAt = 0;
+  // HomeKit writes waiting for the device lock; a poll does not make them wait longer than it has to
+  private writesWaiting = 0;
 
   private services: Array<{
     serviceType: WithUUID<typeof Service>;
@@ -182,7 +184,7 @@ export default abstract class HomeKitDevice {
       this.log.warn('No device_id in sys_info');
       return false;
     }
-    const updatedSysInfo = await this.deviceManager.getSysInfo(deviceId);
+    const updatedSysInfo = await this.deviceManager.getSysInfo(deviceId, () => this.writesWaiting > 0);
     Object.assign(this.ttlockDevice.sys_info, updatedSysInfo);
     this.log.debug(`Updated sys_info: ${updatedSysInfo.alias ?? deviceId}`);
     return true;
@@ -471,7 +473,10 @@ export default abstract class HomeKitDevice {
     value: CharacteristicValue,
   ): Promise<void | string> {
     const lockKey = this.makeLockKey();
+    this.writesWaiting++;
+    // withLock always runs the action, so the count always goes down again
     return await this.withLock(lockKey, async () => {
+      this.writesWaiting--;
       if (this.shouldSkipUpdate()) {
         this.log.debug(
           `Not sending the ${descriptor.name ?? descriptor.type.UUID} write: the lock was removed or Homebridge is shutting down`,
