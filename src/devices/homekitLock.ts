@@ -164,21 +164,26 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     const context = this.homebridgeAccessory.context;
     let identifiers = context.passcodeIdentifiers;
     let changed = false;
+    // Identifiers the Home app may still hold for entries that are now left out
+    let reserved = 0;
     if (!identifiers) {
       // Earlier versions used the position in TTLock's list, counting the entries that are now left out; starting
       // from it keeps the identifiers the Home app has. A code with no position (one just added) gets a new number
-      // below, so no two codes share one.
+      // below, so no two codes share one. New codes start after the whole list, so they do not get the identifier
+      // of an entry left out at its end either.
       const seeded: Record<string, number> = {};
       for (const passcode of passcodes) {
         if (passcode.list_position !== undefined) {
           seeded[passcode.passcode_id] ??= passcode.list_position;
         }
+        reserved = Math.max(reserved, passcode.list_length ?? 0);
       }
       identifiers = seeded;
       changed = true;
     }
     let next = Math.max(
       context.nextPasscodeIdentifier ?? 0,
+      reserved,
       ...Object.values(identifiers).map(identifier => identifier + 1),
     );
     const listed = new Set(passcodes.map(passcode => passcode.passcode_id));

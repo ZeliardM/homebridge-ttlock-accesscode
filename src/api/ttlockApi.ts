@@ -1228,6 +1228,7 @@ export class TTLockApi {
         start_date: this.toOptionalNumber(item.startDate),
         end_date: this.toOptionalNumber(item.endDate),
         list_position: position,
+        list_length: response.list.length,
       });
     }
     const leftOut = response.list.length - passcodes.length;
