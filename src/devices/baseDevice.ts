@@ -37,9 +37,12 @@ export default abstract class HomeKitDevice {
   public homebridgeAccessory: PlatformAccessory<TTLockAccessoryContext>;
   public isUpdating = false;
   protected previousSnapshot?: TTLockDevice;
-  protected pollingInterval: NodeJS.Timeout | undefined;
-  private pollingStartTimer: NodeJS.Timeout | undefined;
+  // The next scheduled poll. Each scheduled poll sets the next one when it is done.
+  private pollingTimer: NodeJS.Timeout | undefined;
   private unknownStatePollTimer: NodeJS.Timeout | undefined;
+  // Raised whenever polling stops or is scheduled again, so a poll still running from before sets no timer
+  private pollingGeneration = 0;
+  private pollingIntervalMs = 0;
   protected updateEmitter = new EventEmitter();
   // Every failed poll since the lock last answered, for the log
   private consecutivePollFailures = 0;
@@ -236,22 +239,14 @@ export default abstract class HomeKitDevice {
       return;
     }
     this.clearPollingTimers();
-    const deviceCount = this.platform.getTTLockAccessoryCount();
-    const userIntervalMs = this.platform.config.discoveryOptions.pollingInterval;
-    const effectiveInterval = this.platform.computeEffectivePollingInterval(deviceCount, userIntervalMs);
+    const effectiveInterval = this.computePollingInterval();
+    this.pollingIntervalMs = effectiveInterval;
     // Spread the locks' polls across the interval: locks sharing a gateway that are polled at the same
     // moment make the gateway answer "busy". Every lock still gets its first poll within one interval.
     const { index, count } = this.platform.getPollingSlot(this.ttlockDevice.sys_info.device_id);
     const firstPollDelay = Math.floor((effectiveInterval * (index + 1)) / count);
     this.log.debug(`Starting polling with interval ${effectiveInterval}ms, first poll in ${firstPollDelay}ms`);
-    this.pollingStartTimer = setTimeout(() => {
-      this.pollingStartTimer = undefined;
-      void this.refreshInBackground(false);
-      this.pollingInterval = setInterval(
-        () => void this.refreshInBackground(false),
-        effectiveInterval,
-      );
-    }, firstPollDelay);
+    this.schedulePoll(performance.now() + firstPollDelay, this.pollingGeneration);
     // HomeKit shows the lock as Unknown (discovery could not read its state, or TTLock did not know it): read it soon
     // rather than at the slot. Still staggered, because locks that share a gateway and are polled together find it busy.
     if (!this.isLockStateKnown()) {
@@ -266,6 +261,40 @@ export default abstract class HomeKitDevice {
     }
   }
 
+  private computePollingInterval(): number {
+    return this.platform.computeEffectivePollingInterval(
+      this.platform.getTTLockAccessoryCount(),
+      this.platform.config.discoveryOptions.pollingInterval,
+    );
+  }
+
+  // When a scheduled poll is done, the interval is worked out again before the next one is set: polls show which
+  // locks take a second call, and the daily allowance changes during the month. The next poll is due one interval
+  // after this one was due, not after it finished, so every lock keeps its slot.
+  private schedulePoll(dueAt: number, generation: number): void {
+    this.pollingTimer = setTimeout(() => {
+      this.pollingTimer = undefined;
+      void this.refreshInBackground(false).then(() => {
+        if (generation !== this.pollingGeneration || this.shouldSkipUpdate()) {
+          // Polling stopped or was scheduled again while the poll ran
+          return;
+        }
+        const interval = this.computePollingInterval();
+        if (interval !== this.pollingIntervalMs) {
+          this.log.debug(`Polling interval is now ${interval}ms`);
+          this.pollingIntervalMs = interval;
+        }
+        let nextDueAt = dueAt + interval;
+        const now = performance.now();
+        if (nextDueAt < now) {
+          // The poll took longer than the interval: skip the polls it ran over
+          nextDueAt += Math.ceil((now - nextDueAt) / interval) * interval;
+        }
+        this.schedulePoll(nextDueAt, generation);
+      });
+    }, Math.max(0, dueAt - performance.now()));
+  }
+
   private isLockStateKnown(): boolean {
     const { SECURED, UNSECURED } = this.platform.Characteristic.LockCurrentState;
     const state = this.ttlockDevice.sys_info.state;
@@ -273,17 +302,14 @@ export default abstract class HomeKitDevice {
   }
 
   private clearPollingTimers(): void {
-    if (this.pollingStartTimer) {
-      clearTimeout(this.pollingStartTimer);
-      this.pollingStartTimer = undefined;
+    this.pollingGeneration++;
+    if (this.pollingTimer) {
+      clearTimeout(this.pollingTimer);
+      this.pollingTimer = undefined;
     }
     if (this.unknownStatePollTimer) {
       clearTimeout(this.unknownStatePollTimer);
       this.unknownStatePollTimer = undefined;
-    }
-    if (this.pollingInterval) {
-      clearInterval(this.pollingInterval);
-      this.pollingInterval = undefined;
     }
   }
 

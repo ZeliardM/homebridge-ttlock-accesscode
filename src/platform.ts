@@ -755,8 +755,9 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     // Periodic discovery calls lock/list, and lock/detail and lock/listKeyboardPwd for every lock
     const discoveryCallsPerDay = (1 + 2 * deviceCount) * 86400000 / this.config.discoveryOptions.discoveryPollingInterval;
     const pollingBudgetPerDay = Math.max(0, Math.floor(remainingDailyAllowance * 0.8 - discoveryCallsPerDay));
-    // A poll is lock/queryOpenState, which also returns the battery level; a lock that leaves it out takes a second call
-    const estimatedCallsPerPoll = Math.max(1, deviceCount + (this.ttLockApi?.locksPolledWithTwoCalls ?? 0));
+    // A poll is lock/queryOpenState, which also returns the battery level; a lock that leaves it out takes a second call.
+    // A lock counts as two until its first poll shows which.
+    const estimatedCallsPerPoll = Math.max(1, this.ttLockApi?.pollCallsFor(this.getTTLockDeviceIds()) ?? 2 * deviceCount);
     const maxPollsPerDay = Math.max(1, Math.floor(pollingBudgetPerDay / estimatedCallsPerPoll));
     const basePollingIntervalSec = Math.max(1, Math.floor(86400 / maxPollsPerDay));
 
