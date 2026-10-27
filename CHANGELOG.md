@@ -1,9 +1,13 @@
 # Changelog
-## [v3.0.0-beta.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.1)
+## [v3.0.0-beta.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.1) (2026-10-27)
 
 ### Bug Fixes
 
 - [fix] Read a caret version range with its upper bound [#152](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/152) (@ZeliardM)
+
+### Other Changes
+
+- Update CHANGELOG.md for beta release v3.0.0-beta.1 [beta-release] (@github-actions)
 
 **Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v3.0.0-beta.0...v3.0.0-beta.1
 
