@@ -61,4 +61,6 @@ export interface CharacteristicDescriptor {
   checkSet?: ((value: CharacteristicValue, context: DescriptorContext) => string | undefined) | undefined;
   // Answer HomeKit right away and run applySet in the background (for commands slower than HomeKit waits)
   applySetInBackground?: boolean;
+  // What a set asks for, in words for the log (for example 'unlock')
+  describeSet?: ((value: CharacteristicValue) => string) | undefined;
 }

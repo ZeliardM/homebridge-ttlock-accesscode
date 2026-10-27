@@ -31,6 +31,7 @@ export function buildLockDescriptors(
       getCurrent: context => targetFromState(context.device.state),
       checkSet: checkTarget,
       applySetInBackground: true,
+      describeSet: value => Number(value) === C.LockTargetState.SECURED ? 'lock' : 'unlock',
       applySet: async (value, context) => {
         const applied = await setTarget(Number(value), context);
         if (applied === false) {

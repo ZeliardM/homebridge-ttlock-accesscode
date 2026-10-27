@@ -528,15 +528,21 @@ export default abstract class HomeKitDevice {
     requested: CharacteristicValue,
     logRevert = false,
   ): void {
+    const characteristic = service.getCharacteristic(descriptor.type);
     // Read the lock's state as it is now, not as it was when the command started
     const current = descriptor.getCurrent(this.buildDescriptorContext());
-    if (current === requested) {
+    // Nothing to revert when HomeKit shows it already: the command took effect, or it was not sent and the write put
+    // the lock's state back in HomeKit (and logged why)
+    if (characteristic.value === current) {
       return;
     }
     if (logRevert) {
-      this.log.warn(`${descriptor.name ?? descriptor.type.UUID} did not change to ${requested}; reverting HomeKit to ${current}`);
+      const what = descriptor.describeSet
+        ? `The ${descriptor.describeSet(requested)} command did not complete`
+        : `${descriptor.name ?? descriptor.type.UUID} did not change to ${requested}`;
+      this.log.warn(`${what}; reverting HomeKit to the lock's current state`);
     }
-    service.getCharacteristic(descriptor.type).updateValue(current);
+    characteristic.updateValue(current);
   }
 
   private async executeDescriptorSet(
