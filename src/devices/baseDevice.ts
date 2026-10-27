@@ -374,9 +374,20 @@ export default abstract class HomeKitDevice {
     }
   }
 
-  // Discovery found a lock that does not answer its polls: read it now instead of at its next poll
-  public updateAfterPeriodicDiscovery(): void {
-    void this.refreshInBackground(true);
+  // Discovery read the state of a lock that has not answered its last polls, so the lock answers again: show it now
+  // rather than at its next poll. Not awaited, so discovery does not wait for a lock command in flight.
+  public applyStateFromDiscovery(state: number, discoveryStartedAt: number): void {
+    void this.withLock(this.makeLockKey(), async () => {
+      // A poll that answered since, or a HomeKit write since discovery started, is newer than what discovery read
+      if (this.shouldSkipUpdate() || !this.ttlockDevice.offline || this.lastWriteAt >= discoveryStartedAt) {
+        return;
+      }
+      // Not the battery level: lock/list's is TTLock's cached value, and the battery level comes from polls only
+      this.ttlockDevice.sys_info.state = state;
+      this.markDeviceReachable();
+      await this.updateAllServicesAndCharacteristics(true);
+      this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
+    }).catch(error => this.log.error('Applying the state discovery read failed:', error));
   }
 
   // Nothing awaits these refreshes, and an unhandled rejection makes Homebridge shut down.

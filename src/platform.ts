@@ -630,10 +630,13 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     if (existingDevice) {
       // Discovery only refreshes identity, so it applies even while a poll or lock command is in flight
       existingDevice.updateFromDiscovery(device, this.discoveryStartedAt);
-      if (existingDevice.ttlockDevice.offline) {
-        // It still polls; read it now rather than wait for its next poll to find out whether it answers again
-        this.log.debug(`Device [${device.sys_info.device_id}] has not answered its last polls. Reading it now.`);
-        existingDevice.updateAfterPeriodicDiscovery();
+      if (existingDevice.ttlockDevice.offline && device.sys_info.state !== undefined) {
+        // Discovery read the state of a lock that has not answered its last polls; nothing more is sent to it
+        this.log.debug(`Device [${device.sys_info.device_id}] has not answered its last polls, but discovery read it.`);
+        existingDevice.applyStateFromDiscovery(device.sys_info.state, this.discoveryStartedAt);
+      } else if (existingDevice.ttlockDevice.offline) {
+        // It still polls, so it recovers as soon as a poll reads it
+        this.log.debug(`Device [${device.sys_info.device_id}] has not answered its last polls, and discovery could not read it.`);
       } else {
         // Its own polling keeps the state current; discovery only refreshed its identity
         this.log.debug(`Updated existing HomeKit device [${device.sys_info.device_id}] from discovery.`);
