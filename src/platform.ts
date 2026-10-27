@@ -854,6 +854,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
         this.schedulePollingIntervalCheck(round, rounds + 1);
       }
     }, Math.max(0, checkAt - performance.now()));
+    // Only the locks' polls keep the process running; once every lock has stopped polling, this check must not
+    this.pollingCheckTimer.unref();
   }
 
   private clearPollingIntervalCheck(): void {
