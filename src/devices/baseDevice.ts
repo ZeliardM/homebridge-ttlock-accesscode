@@ -610,8 +610,14 @@ export default abstract class HomeKitDevice {
           } else {
             this.log.warn(message);
           }
-        } else {
+        } else if (error instanceof Error) {
           this.log.error(`OnSet error for ${descriptor.name ?? descriptor.type.UUID}`, error);
+        } else {
+          // Something a library threw that is not an Error: only its message, never the object and what it holds
+          this.log.error(
+            `OnSet error for ${descriptor.name ?? descriptor.type.UUID}: ` +
+            `${String((error as { message?: unknown } | null | undefined)?.message ?? error)}`,
+          );
         }
         // Tell HomeKit the write failed. A lock command was answered already; it is reverted instead.
         throw this.communicationFailure();

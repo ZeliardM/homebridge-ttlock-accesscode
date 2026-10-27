@@ -281,6 +281,17 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     ).toString('hex');
   }
 
+  // ber-tlv's parse error is not an Error and carries the items it read before it failed, which can hold an access
+  // code, so it is never passed on. Its text is left out as well: when a request is out of step, it can name bytes of
+  // a code as a tag or a length.
+  private parseTlv(input: Buffer, what: string): ReturnType<typeof TlvFactory.parse> {
+    try {
+      return TlvFactory.parse(input);
+    } catch {
+      throw new AccessCodeProtocolError(`${what} could not be read as TLV`);
+    }
+  }
+
   private parseOperationType(decodedTlv: Array<{ value: Buffer }>): number {
     const operation = decodedTlv[0];
     if (!operation) {
@@ -290,7 +301,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
   }
 
   private parseIdentifierRequest(element: { value: Buffer }, requestType: string): number {
-    const request = TlvFactory.parse(element.value);
+    const request = this.parseTlv(element.value, `${requestType} request`);
     const identifierRecord = request[0];
     if (!identifierRecord) {
       throw new AccessCodeProtocolError(`${requestType} request is missing its passcode identifier`);
@@ -311,7 +322,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
   }
 
   private parsePasscodeRequest(element: { value: Buffer }): string {
-    const request = TlvFactory.parse(element.value);
+    const request = this.parseTlv(element.value, 'Add request');
     const passcodeRecord = request[0];
     if (!passcodeRecord) {
       throw new AccessCodeProtocolError('Add request is missing the passcode payload');
@@ -488,7 +499,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
   private async setAccessCodeControlPoint(device: SysInfo, value: CharacteristicValue): Promise<string> {
     this.setLockBusy(true);
     try {
-      const decodedTlv = TlvFactory.parse(Buffer.from(String(value), 'base64').toString('hex'));
+      const decodedTlv = this.parseTlv(Buffer.from(String(value), 'base64'), 'The request');
       // The records carry the access codes, so log only how many there are
       this.log.debug(`Decoded AccessCodeControlPoint request on ${this.name}: ${decodedTlv.length} TLV record(s)`);
 
