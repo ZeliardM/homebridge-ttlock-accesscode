@@ -29,9 +29,8 @@ export enum TTLockApiErrorCategory {
 const NOT_SENT_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'EHOSTDOWN']);
 const TLS_CODE = /^(CERT_|ERR_TLS_|UNABLE_TO_|SELF_SIGNED_|DEPTH_ZERO_)/;
 
-// Polls in a row that must find the battery level in lock/queryOpenState before polling is paced as if the lock
-// takes one call a poll
-const ONE_CALL_POLLS_IN_A_ROW = 3;
+// How many of a lock's latest polls the estimate of its API calls a poll looks at (see TTLockApi.estimatePollCalls)
+const POLL_CALLS_WINDOW = 8;
 
 // How a request that got no answer failed: 'notSent' never reached TTLock, 'noAnswer' may have reached it
 // (timeouts, resets and anything not recognised), 'tls' failed on the certificate and never succeeds on a retry
@@ -177,9 +176,10 @@ export class TTLockApi {
   private readonly gatewayQueue = new SimpleMutex();
   private readonly gatewayGapMs = 1000;
   private lastGatewayRequestEndAt = Number.NEGATIVE_INFINITY;
-  // How many polls in a row found the battery level in lock/queryOpenState, by lock; such a poll takes one API call.
-  // A poll that does not find it takes two: lock/queryElectricQuantity reads the battery level.
-  private readonly pollsWithBatteryInARow = new Map<string, number>();
+  // By lock, whether each of its last POLL_CALLS_WINDOW polls (oldest first) found the battery level in
+  // lock/queryOpenState; such a poll takes one API call. A poll that does not find it takes two:
+  // lock/queryElectricQuantity reads the battery level.
+  private readonly recentPollsWithBattery = new Map<string, boolean[]>();
   // Gateway requests that are safe to send again after the gateway could not reach the lock (errcode 1): reads and
   // lock/unlock. Not passcode add/delete, which TTLock may have applied.
   private static readonly resendSafeGatewayEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
@@ -1100,17 +1100,15 @@ export class TTLockApi {
     // lock/queryOpenState also returns electricQuantity; only make the extra call if it is missing
     let electricQuantity: unknown = stateResponse.electricQuantity;
     if (typeof electricQuantity === 'number') {
-      this.pollsWithBatteryInARow.set(
-        lockId,
-        Math.min(ONE_CALL_POLLS_IN_A_ROW, (this.pollsWithBatteryInARow.get(lockId) ?? 0) + 1),
-      );
+      this.recordPollCalls(lockId, true);
     } else if (shouldYield?.()) {
       // A second gateway request would hold up the waiting write by up to the gateway timeout, enough for a lock
-      // command to miss its time limit. The state was read; keep the last known battery level.
-      this.pollsWithBatteryInARow.delete(lockId);
+      // command to miss its time limit. The state was read; keep the last known battery level. Counted as a poll that
+      // takes two calls, as this lock's polls do when no command is waiting.
+      this.recordPollCalls(lockId, false);
       this.log.debug(`Not reading the battery level of lock ${lockId} now: a HomeKit command for it is waiting`);
     } else {
-      this.pollsWithBatteryInARow.delete(lockId);
+      this.recordPollCalls(lockId, false);
       try {
         const batteryResponse = await this.makeAuthenticatedRequest<{
           electricQuantity?: number;
@@ -1134,13 +1132,27 @@ export class TTLockApi {
     return sysInfo;
   }
 
-  // How many of these locks a poll reads with one API call; polling is paced from it. A lock counts only once its
-  // last ONE_CALL_POLLS_IN_A_ROW polls found the battery level with the state, and no longer from the first poll that
-  // did not: a lock whose battery level comes and goes would otherwise change the count, and with it the interval of
-  // every lock, each time it comes or goes. Counting a lock as two calls for too long only polls more slowly than the
-  // budget allows; counting it as one for too long would poll faster.
-  public countLocksPolledWithOneCall(lockIds: readonly string[]): number {
-    return lockIds.filter(lockId => (this.pollsWithBatteryInARow.get(lockId) ?? 0) >= ONE_CALL_POLLS_IN_A_ROW).length;
+  private recordPollCalls(lockId: string, withBattery: boolean): void {
+    const polls = this.recentPollsWithBattery.get(lockId) ?? [];
+    polls.push(withBattery);
+    if (polls.length > POLL_CALLS_WINDOW) {
+      polls.shift();
+    }
+    this.recentPollsWithBattery.set(lockId, polls);
+  }
+
+  // The API calls one poll of each of these locks takes, added up; polling is paced from it. Each lock counts as one
+  // call plus the share of its last POLL_CALLS_WINDOW polls that took a second call, so the sum can be a fraction.
+  // Polls a lock has not had yet count as taking two calls, so a lock not polled yet counts as two and polling never
+  // starts out faster than the budget allows. A lock whose battery level comes and goes moves the sum by at most
+  // 1/POLL_CALLS_WINDOW at each poll instead of by a whole call, so it rarely puts the interval of every lock well
+  // off. The other side: a lock that from now on always takes two calls counts as two only after POLL_CALLS_WINDOW
+  // polls.
+  public estimatePollCalls(lockIds: readonly string[]): number {
+    return lockIds.reduce((calls, lockId) => {
+      const pollsWithBattery = (this.recentPollsWithBattery.get(lockId) ?? []).filter(withBattery => withBattery).length;
+      return calls + 2 - pollsWithBattery / POLL_CALLS_WINDOW;
+    }, 0);
   }
 
   // electricQuantity is a percentage; anything else is not a battery level

@@ -779,10 +779,12 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const discoveryCallsPerDay = (1 + 2 * deviceCount) * 86400000 / this.config.discoveryOptions.discoveryPollingInterval;
     const pollingBudgetPerDay = Math.max(0, Math.floor(remainingDailyAllowance * 0.8 - discoveryCallsPerDay));
     // A poll is lock/queryOpenState, which also returns the battery level; a lock that leaves it out takes a second call.
-    // A lock counts as two until three polls in a row show it takes one, so polling never starts out faster than the
-    // budget allows.
-    const locksPolledWithOneCall = Math.min(deviceCount, this.ttLockApi?.countLocksPolledWithOneCall(this.getTTLockDeviceIds()) ?? 0);
-    const estimatedCallsPerPoll = Math.max(1, 2 * deviceCount - locksPolledWithOneCall);
+    // Each lock counts as one call plus the share of its recent polls that took two, and polls it has not had yet count
+    // as two (see TTLockApi.estimatePollCalls), so polling never starts out faster than the budget allows. A lock
+    // without a known id counts as two.
+    const lockIds = this.getTTLockDeviceIds();
+    const lockPollCalls = this.ttLockApi?.estimatePollCalls(lockIds) ?? 2 * lockIds.length;
+    const estimatedCallsPerPoll = Math.max(1, lockPollCalls + 2 * Math.max(0, deviceCount - lockIds.length));
     const maxPollsPerDay = Math.max(1, Math.floor(pollingBudgetPerDay / estimatedCallsPerPoll));
     const basePollingIntervalSec = Math.max(1, Math.floor(86400 / maxPollsPerDay));
 
@@ -827,11 +829,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
   // Once a round, just after its last slot, when every lock has been polled at the interval in use: polls show which
   // locks take a second call, and the daily allowance changes during the month. Polling is scheduled again only when
-  // the interval worked out now is well off the one in use, so at most once a round. A lock whose battery level comes
-  // and goes changes the calls a round is paced for only when three polls in a row have found the battery level with
-  // the state, and again at its next poll that does not (see TTLockApi.countLocksPolledWithOneCall). With few locks,
-  // one lock's second call is enough to put the interval well off, so each of those changes still moves every lock's
-  // slot.
+  // the interval worked out now is well off the one in use, so at most once a round. Each poll moves the calls a
+  // round is paced for by only a fraction of a call (see TTLockApi.estimatePollCalls), so a lock whose battery level
+  // comes and goes seldom puts the interval well off, though with one or two locks it still does now and then. After
+  // startup, when every lock counts as two calls, the interval comes down in steps over about eight polls of each lock
+  // as they show which locks take one.
   private schedulePollingIntervalCheck(round: PollingRound, rounds: number): void {
     this.clearPollingIntervalCheck();
     if (this.isShuttingDown) {
