@@ -173,9 +173,9 @@ export class TTLockApi {
   private readonly gatewayQueue = new SimpleMutex();
   private readonly gatewayGapMs = 1000;
   private lastGatewayRequestEndAt = Number.NEGATIVE_INFINITY;
-  // API calls each lock's last poll took: 1, or 2 when lock/queryOpenState had no battery level and a second call
-  // read it
-  private readonly pollCallsByLock = new Map<string, number>();
+  // Locks whose last poll found the battery level in lock/queryOpenState, so it took one API call. A poll of any other
+  // lock takes two: lock/queryElectricQuantity reads the battery level.
+  private readonly locksPolledWithOneCall = new Set<string>();
   // Gateway requests that are safe to send again after the gateway could not reach the lock (errcode 1): reads and
   // lock/unlock. Not passcode add/delete, which TTLock may have applied.
   private static readonly resendSafeGatewayEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
@@ -1095,14 +1095,14 @@ export class TTLockApi {
     // lock/queryOpenState also returns electricQuantity; only make the extra call if it is missing
     let electricQuantity: unknown = stateResponse.electricQuantity;
     if (typeof electricQuantity === 'number') {
-      this.pollCallsByLock.set(lockId, 1);
+      this.locksPolledWithOneCall.add(lockId);
     } else if (shouldYield?.()) {
       // A second gateway request would hold up the waiting write by up to the gateway timeout, enough for a lock
       // command to miss its time limit. The state was read; keep the last known battery level.
-      this.pollCallsByLock.set(lockId, 2);
+      this.locksPolledWithOneCall.delete(lockId);
       this.log.debug(`Not reading the battery level of lock ${lockId} now: a HomeKit command for it is waiting`);
     } else {
-      this.pollCallsByLock.set(lockId, 2);
+      this.locksPolledWithOneCall.delete(lockId);
       try {
         const batteryResponse = await this.makeAuthenticatedRequest<{
           electricQuantity?: number;
@@ -1126,10 +1126,9 @@ export class TTLockApi {
     return sysInfo;
   }
 
-  // API calls one poll of each of these locks takes; polling is paced from it. A lock not polled yet counts as two,
-  // so polling never starts out faster than the budget allows.
-  public pollCallsFor(lockIds: readonly string[]): number {
-    return lockIds.reduce((calls, lockId) => calls + (this.pollCallsByLock.get(lockId) ?? 2), 0);
+  // How many of these locks a poll reads with one API call; polling is paced from it
+  public countLocksPolledWithOneCall(lockIds: readonly string[]): number {
+    return lockIds.filter(lockId => this.locksPolledWithOneCall.has(lockId)).length;
   }
 
   // electricQuantity is a percentage; anything else is not a battery level
