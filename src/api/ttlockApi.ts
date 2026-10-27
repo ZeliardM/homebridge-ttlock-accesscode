@@ -178,7 +178,8 @@ export class TTLockApi {
   private lastGatewayRequestEndAt = Number.NEGATIVE_INFINITY;
   // By lock, whether each of its last POLL_CALLS_WINDOW polls (oldest first) found the battery level in
   // lock/queryOpenState; such a poll takes one API call. A poll that does not find it takes two:
-  // lock/queryElectricQuantity reads the battery level.
+  // lock/queryElectricQuantity reads the battery level. Discovery's own lock/queryOpenState read is recorded here
+  // too (see recordDiscoveryStateRead).
   private readonly recentPollsWithBattery = new Map<string, boolean[]>();
   // Gateway requests that are safe to send again after the gateway could not reach the lock (errcode 1): reads and
   // lock/unlock. Not passcode add/delete, which TTLock may have applied.
