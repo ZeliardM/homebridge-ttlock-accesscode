@@ -386,9 +386,10 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     device: SysInfo,
     decodedTlv: Array<{ value: Buffer }>,
   ): Promise<string> {
+    // Every code is read before any is added, so a request that cannot be read adds nothing
+    const newPassCodes = decodedTlv.slice(1).map(element => this.parsePasscodeRequest(element));
     const records: string[] = [];
-    for (const element of decodedTlv.slice(1)) {
-      const newPassCode = this.parsePasscodeRequest(element);
+    for (const newPassCode of newPassCodes) {
       // Only a usable code counts: one with the same digits that has ended does not open the lock. TTLock decides
       // whether it takes the new code anyway.
       const cachedPasscodes = this.usablePasscodes(await this.ensurePasscodesLoaded(device));
@@ -459,17 +460,32 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     if (deleteRequests.length === 0) {
       throw new AccessCodeProtocolError('Delete request is missing the target passcode identifier');
     }
-    const records: string[] = [];
-    for (const element of deleteRequests) {
-      // Any code TTLock lists: HomeKit may have been shown it before it ended, and may still remove it
-      const passcodes = await this.ensurePasscodesLoaded(device);
-      const deletePasscodeIdentifier = this.parseIdentifierRequest(element, 'Delete');
-      const passcode = this.findPasscodeByIdentifier(passcodes, deletePasscodeIdentifier);
+    // Every identifier is read and looked up before anything is deleted, so a request that cannot be read deletes
+    // nothing
+    const identifiers = deleteRequests.map(element => this.parseIdentifierRequest(element, 'Delete'));
+    // Any code TTLock lists: HomeKit may have been shown it before it ended, and may still remove it
+    const passcodes = await this.ensurePasscodesLoaded(device);
+    const targets = new Map<string, { passcode: Passcode; record: string }>();
+    for (const identifier of identifiers) {
+      const passcode = this.findPasscodeByIdentifier(passcodes, identifier);
       if (!passcode) {
-        throw new AccessCodeProtocolError(`Passcode identifier ${deletePasscodeIdentifier} was not found for delete`);
+        // Already gone: deleted in the TTLock app, or by an earlier Remove that failed on a later code. The others
+        // are still deleted, so a Remove sent again after a failure deletes the codes that are left.
+        this.log.debug(`Passcode identifier ${identifier} is no longer on ${this.name}; nothing to delete for it`);
+        continue;
       }
       // Built first: once the code is deleted, its identifier is let go
-      const record = this.buildPasscodeResponseRecord(passcode);
+      targets.set(passcode.passcode_id, { passcode, record: this.buildPasscodeResponseRecord(passcode) });
+    }
+    if (targets.size === 0) {
+      throw new AccessCodeProtocolError(
+        identifiers.length === 1
+          ? `Passcode identifier ${identifiers[0]} was not found for delete`
+          : `None of the passcode identifiers ${identifiers.join(', ')} were found for delete`,
+      );
+    }
+    const records: string[] = [];
+    for (const { passcode, record } of targets.values()) {
       this.log.info(`Deleting passcode id ${passcode.passcode_id} on ${this.name}`);
       await this.deletePasscode(device, passcode);
       records.push(record);
