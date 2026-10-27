@@ -14,6 +14,9 @@ export type ApiCallPriority = 'user' | 'background';
 const USER_RESERVE_MIN_CALLS = 50;
 const USER_RESERVE_FRACTION = 0.01;
 
+const USAGE_FILE_READ_ATTEMPTS = 2;
+const USAGE_FILE_READ_RETRY_DELAY_MS = 1000;
+
 type StoredUsage = {
   year: number;
   month: number;
@@ -41,7 +44,7 @@ function errorText(error: unknown): string {
 }
 
 export class UsageTracker extends EventEmitter {
-  private storageFilePath?: string;
+  private storageFilePath: string | undefined;
   private state: StoredUsage | null = null;
   private log: Logging;
   private api: API;
@@ -101,17 +104,29 @@ export class UsageTracker extends EventEmitter {
   }
 
   // The stored usage; null when there is no usage file yet, undefined when it cannot be read or does not hold valid
-  // usage. Such a file is moved aside: it stays there to look at, and the next save starts a new one.
+  // usage. Such a file is moved aside: it stays there to look at, and the next save starts a new one. A file that
+  // cannot be read may still hold this month's count, so when it cannot be moved aside either, usage is not saved
+  // in this run rather than saved over it.
   private async readStoredUsage(filePath: string): Promise<Pick<StoredUsage, 'year' | 'month' | 'used'> | null | undefined> {
-    let data: string;
+    let data: string | null;
     try {
-      data = await fs.readFile(filePath, 'utf8');
+      data = await this.readUsageFile(filePath);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
-        return null;
+      const asidePath = `${filePath}.unreadable-${Date.now()}`;
+      try {
+        await fs.rename(filePath, asidePath);
+        this.log.error(`Could not read the API usage file ${filePath}: ${errorText(err)}; moved it to ${asidePath}`);
+      } catch (renameErr) {
+        this.storageFilePath = undefined;
+        this.log.error(
+          `Could not read the API usage file ${filePath}: ${errorText(err)}; it could not be moved aside either ` +
+          `(${errorText(renameErr)}), so API usage is not saved until Homebridge restarts`,
+        );
       }
-      this.log.error(`Could not read the API usage file ${filePath}: ${errorText(err)}`);
       return undefined;
+    }
+    if (data === null) {
+      return null;
     }
     let parsed: unknown;
     try {
@@ -130,6 +145,25 @@ export class UsageTracker extends EventEmitter {
       this.log.error(`The API usage file ${filePath} does not hold valid usage and could not be moved aside: ${errorText(err)}`);
     }
     return undefined;
+  }
+
+  // The file's content, or null when there is none. A file that is there but could not be read this time (EIO,
+  // EMFILE) is read once more before giving up on it.
+  private async readUsageFile(filePath: string): Promise<string | null> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await fs.readFile(filePath, 'utf8');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+          return null;
+        }
+        if (attempt >= USAGE_FILE_READ_ATTEMPTS) {
+          throw err;
+        }
+        this.log.debug(`Could not read the API usage file ${filePath}, trying again: ${errorText(err)}`);
+        await new Promise(resolve => setTimeout(resolve, USAGE_FILE_READ_RETRY_DELAY_MS));
+      }
+    }
   }
 
   private newMonthState(now: Date, used: number): StoredUsage {
