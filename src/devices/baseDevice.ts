@@ -41,10 +41,12 @@ export default abstract class HomeKitDevice {
   private pollingStartTimer: NodeJS.Timeout | undefined;
   private unknownStatePollTimer: NodeJS.Timeout | undefined;
   protected updateEmitter = new EventEmitter();
+  // Every failed poll since the lock last answered, for the log
   private consecutivePollFailures = 0;
-  // After this many failed polls in a row the lock shows No Response in HomeKit. Polling goes on, so it recovers
-  // as soon as the lock answers again.
-  private readonly maxConsecutivePollFailures = 3;
+  // The failed polls among them that say the lock cannot be reached (see countsTowardOffline). After this many the
+  // lock shows No Response in HomeKit. Polling goes on, so it recovers as soon as the lock answers again.
+  private unansweredPolls = 0;
+  private readonly maxUnansweredPolls = 3;
 
   private static locks: Map<string, Promise<unknown>> = new Map();
   private pendingChanges: Map<string, { pendingValue: CharacteristicValue; count: number }> = new Map();
@@ -548,26 +550,37 @@ export default abstract class HomeKitDevice {
   // The lock answered (a poll read it, or TTLock carried out a command): it is reachable and seen now
   protected markDeviceReachable(): void {
     const failures = this.consecutivePollFailures;
+    const unanswered = this.unansweredPolls;
     const wasOffline = this.ttlockDevice.offline;
     const now = new Date();
     this.consecutivePollFailures = 0;
+    this.unansweredPolls = 0;
     this.ttlockDevice.last_seen = now;
     this.homebridgeAccessory.context.lastSeen = now;
     this.setOfflineState(false);
-    if (failures > 0) {
+    // Only polls that did not reach the lock say communication was lost; a poll refused for the API budget, a login
+    // or a rate limit never reached it
+    if (unanswered > 0) {
       this.log.info(
-        `Recovered communication with the lock after ${failures} failed poll${failures === 1 ? '' : 's'}` +
+        `Recovered communication with the lock after ${unanswered} unanswered poll${unanswered === 1 ? '' : 's'}` +
         (wasOffline ? '; HomeKit no longer shows it as No Response' : ''),
       );
+    } else if (failures > 0) {
+      this.log.debug(`Polls work again after ${failures} failed poll${failures === 1 ? '' : 's'}`);
     }
   }
 
   // A run of failed polls is logged once: a warning for the first one and debug after that, and a warning when
-  // HomeKit starts showing No Response. The recovery is logged once too (markDeviceReachable).
+  // HomeKit starts showing No Response. The first poll that did not reach the lock is a warning too, when polls
+  // refused for the API budget, a login or a rate limit came first. The recovery is logged once (markDeviceReachable).
   private recordPollFailure(error: unknown): void {
+    const unanswered = this.countsTowardOffline(error);
     this.consecutivePollFailures++;
+    if (unanswered) {
+      this.unansweredPolls++;
+    }
     const reason = error instanceof Error ? error.message : String(error);
-    if (this.consecutivePollFailures === 1) {
+    if (this.consecutivePollFailures === 1 || (unanswered && this.unansweredPolls === 1)) {
       this.log.warn(`Poll failed: ${reason}`);
     } else {
       this.log.debug(`Poll failed (${this.consecutivePollFailures} in a row): ${reason}`);
@@ -576,10 +589,12 @@ export default abstract class HomeKitDevice {
       // Not an answer from TTLock, so keep where it came from
       this.log.debug(error.stack);
     }
-    if (this.consecutivePollFailures >= this.maxConsecutivePollFailures && this.countsTowardOffline(error)) {
+    // Failures that do not count neither add to the count nor reset it: three polls the lock did not answer still
+    // count as three with refused polls in between
+    if (unanswered && this.unansweredPolls >= this.maxUnansweredPolls) {
       if (!this.ttlockDevice.offline) {
         this.log.warn(
-          `No answer from the lock in ${this.consecutivePollFailures} polls in a row; HomeKit shows it as No Response. ` +
+          `No answer from the lock in ${this.unansweredPolls} polls; HomeKit shows it as No Response. ` +
           'Polling continues, so it recovers when the lock answers again.',
         );
       }
