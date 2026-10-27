@@ -43,13 +43,18 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-// EPERM or EACCES on moving or replacing the usage file most often means that it or its folder belongs to another user
-// (Homebridge once run as root, for example), though an immutable file or some mounts refuse it too
+// EPERM or EACCES on writing, moving or replacing the usage file most often means that it or its folder belongs to
+// another user (Homebridge once run as root, for example), though an immutable file or some mounts refuse it too
 function ownershipHint(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   return code === 'EPERM' || code === 'EACCES'
-    ? '. The usage file or its folder may belong to another user, which must be fixed for API usage to be saved'
+    ? '. The usage file or its folder may belong to another user; if so, that must be fixed for API usage to be saved'
     : '';
+}
+
+function withOwnershipHint(error: unknown): unknown {
+  const hint = ownershipHint(error);
+  return hint ? new Error(`${errorText(error)}${hint}`, { cause: error }) : error;
 }
 
 export class UsageTracker extends EventEmitter {
@@ -228,7 +233,11 @@ export class UsageTracker extends EventEmitter {
     }
     const tempPath = `${this.storageFilePath}.tmp`;
     try {
-      await fs.writeFile(tempPath, JSON.stringify(this.state), 'utf8');
+      try {
+        await fs.writeFile(tempPath, JSON.stringify(this.state), 'utf8');
+      } catch (err) {
+        throw withOwnershipHint(err);
+      }
       const asidePath = await this.moveUnusableFileAside(this.storageFilePath);
       try {
         await fs.rename(tempPath, this.storageFilePath);
@@ -236,8 +245,7 @@ export class UsageTracker extends EventEmitter {
         if (asidePath) {
           await this.moveAsideFileBack(asidePath, this.storageFilePath);
         }
-        const hint = ownershipHint(err);
-        throw hint ? new Error(`${errorText(err)}${hint}`, { cause: err }) : err;
+        throw withOwnershipHint(err);
       }
       if (asidePath) {
         const what = this.unusableFile === 'unreadable' ? 'could not be read' : 'did not hold valid usage';
