@@ -29,6 +29,10 @@ export enum TTLockApiErrorCategory {
 const NOT_SENT_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'EHOSTDOWN']);
 const TLS_CODE = /^(CERT_|ERR_TLS_|UNABLE_TO_|SELF_SIGNED_|DEPTH_ZERO_)/;
 
+// Polls in a row that must find the battery level in lock/queryOpenState before polling is paced as if the lock
+// takes one call a poll
+const ONE_CALL_POLLS_IN_A_ROW = 3;
+
 // How a request that got no answer failed: 'notSent' never reached TTLock, 'noAnswer' may have reached it
 // (timeouts, resets and anything not recognised), 'tls' failed on the certificate and never succeeds on a retry
 export type NetworkFailure = 'notSent' | 'noAnswer' | 'tls';
@@ -173,9 +177,9 @@ export class TTLockApi {
   private readonly gatewayQueue = new SimpleMutex();
   private readonly gatewayGapMs = 1000;
   private lastGatewayRequestEndAt = Number.NEGATIVE_INFINITY;
-  // Locks whose last poll found the battery level in lock/queryOpenState, so it took one API call. A poll of any other
-  // lock takes two: lock/queryElectricQuantity reads the battery level.
-  private readonly locksPolledWithOneCall = new Set<string>();
+  // How many polls in a row found the battery level in lock/queryOpenState, by lock; such a poll takes one API call.
+  // A poll that does not find it takes two: lock/queryElectricQuantity reads the battery level.
+  private readonly pollsWithBatteryInARow = new Map<string, number>();
   // Gateway requests that are safe to send again after the gateway could not reach the lock (errcode 1): reads and
   // lock/unlock. Not passcode add/delete, which TTLock may have applied.
   private static readonly resendSafeGatewayEndpoints = ['lock/queryOpenState', 'lock/queryElectricQuantity', 'lock/lock', 'lock/unlock'];
@@ -1095,14 +1099,17 @@ export class TTLockApi {
     // lock/queryOpenState also returns electricQuantity; only make the extra call if it is missing
     let electricQuantity: unknown = stateResponse.electricQuantity;
     if (typeof electricQuantity === 'number') {
-      this.locksPolledWithOneCall.add(lockId);
+      this.pollsWithBatteryInARow.set(
+        lockId,
+        Math.min(ONE_CALL_POLLS_IN_A_ROW, (this.pollsWithBatteryInARow.get(lockId) ?? 0) + 1),
+      );
     } else if (shouldYield?.()) {
       // A second gateway request would hold up the waiting write by up to the gateway timeout, enough for a lock
       // command to miss its time limit. The state was read; keep the last known battery level.
-      this.locksPolledWithOneCall.delete(lockId);
+      this.pollsWithBatteryInARow.delete(lockId);
       this.log.debug(`Not reading the battery level of lock ${lockId} now: a HomeKit command for it is waiting`);
     } else {
-      this.locksPolledWithOneCall.delete(lockId);
+      this.pollsWithBatteryInARow.delete(lockId);
       try {
         const batteryResponse = await this.makeAuthenticatedRequest<{
           electricQuantity?: number;
@@ -1126,9 +1133,13 @@ export class TTLockApi {
     return sysInfo;
   }
 
-  // How many of these locks a poll reads with one API call; polling is paced from it
+  // How many of these locks a poll reads with one API call; polling is paced from it. A lock counts only once its
+  // last ONE_CALL_POLLS_IN_A_ROW polls found the battery level with the state, and no longer from the first poll that
+  // did not: a lock whose battery level comes and goes would otherwise change the count, and with it the interval of
+  // every lock, each time it comes or goes. Counting a lock as two calls for too long only polls more slowly than the
+  // budget allows; counting it as one for too long would poll faster.
   public countLocksPolledWithOneCall(lockIds: readonly string[]): number {
-    return lockIds.filter(lockId => this.locksPolledWithOneCall.has(lockId)).length;
+    return lockIds.filter(lockId => (this.pollsWithBatteryInARow.get(lockId) ?? 0) >= ONE_CALL_POLLS_IN_A_ROW).length;
   }
 
   // electricQuantity is a percentage; anything else is not a battery level

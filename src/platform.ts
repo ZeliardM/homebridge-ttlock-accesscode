@@ -779,7 +779,8 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
     const discoveryCallsPerDay = (1 + 2 * deviceCount) * 86400000 / this.config.discoveryOptions.discoveryPollingInterval;
     const pollingBudgetPerDay = Math.max(0, Math.floor(remainingDailyAllowance * 0.8 - discoveryCallsPerDay));
     // A poll is lock/queryOpenState, which also returns the battery level; a lock that leaves it out takes a second call.
-    // A lock counts as two until a poll shows it takes one, so polling never starts out faster than the budget allows.
+    // A lock counts as two until three polls in a row show it takes one, so polling never starts out faster than the
+    // budget allows.
     const locksPolledWithOneCall = Math.min(deviceCount, this.ttLockApi?.countLocksPolledWithOneCall(this.getTTLockDeviceIds()) ?? 0);
     const estimatedCallsPerPoll = Math.max(1, 2 * deviceCount - locksPolledWithOneCall);
     const maxPollsPerDay = Math.max(1, Math.floor(pollingBudgetPerDay / estimatedCallsPerPoll));
@@ -826,8 +827,11 @@ export default class TTLockAccessCodePlatform implements DynamicPlatformPlugin {
 
   // Once a round, just after its last slot, when every lock has been polled at the interval in use: polls show which
   // locks take a second call, and the daily allowance changes during the month. Polling is scheduled again only when
-  // the interval worked out now is well off the one in use, and the next check is a whole round after that, so a
-  // lock that only sometimes takes a second call does not keep moving every lock's slot.
+  // the interval worked out now is well off the one in use, so at most once a round. A lock whose battery level comes
+  // and goes changes the calls a round is paced for only when three polls in a row have found the battery level with
+  // the state, and again at its next poll that does not (see TTLockApi.countLocksPolledWithOneCall). With few locks,
+  // one lock's second call is enough to put the interval well off, so each of those changes still moves every lock's
+  // slot.
   private schedulePollingIntervalCheck(round: PollingRound, rounds: number): void {
     this.clearPollingIntervalCheck();
     if (this.isShuttingDown) {
