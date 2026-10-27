@@ -625,7 +625,8 @@
     type: 'number',
     min: 0,
     max: 60000,
-    note: 'The time to wait to combine similar commands for a device before sending a command.',
+    note: 'How long periodic device discovery waits before it starts, so discoveries requested together run once. ' +
+      'Lock polls and commands do not wait for it.',
   })}
           </div>
         </div>

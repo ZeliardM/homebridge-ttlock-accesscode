@@ -16,7 +16,7 @@ import { EventEmitter } from 'node:events';
 import accessoryInformation from './accessoryInformation.js';
 import DeviceManager, { HOMEKIT_WRITE_TIME_LIMIT_MS, LOCK_COMMAND_TIME_LIMIT_MS, runHomeKitWrite } from './deviceManager.js';
 import { TTLockApiError, TTLockApiErrorCategory } from '../api/ttlockApi.js';
-import { deferAndCombine, prefixLogger } from '../utils.js';
+import { prefixLogger } from '../utils.js';
 import type TTLockAccessCodePlatform from '../platform.js';
 import type {
   CharacteristicDescriptor,
@@ -52,8 +52,6 @@ export default abstract class HomeKitDevice {
   // performance.now() when this lock's last HomeKit write started or ended
   private lastWriteAt = 0;
 
-  protected getSysInfoDeferred: () => Promise<boolean>;
-
   private services: Array<{
     serviceType: WithUUID<typeof Service>;
     service: Service;
@@ -70,11 +68,6 @@ export default abstract class HomeKitDevice {
     this.log = prefixLogger(platform.log, `[${this.name}]`);
     this.homebridgeAccessory = this.initializeAccessory();
     this.homebridgeAccessory.on(PlatformAccessoryEvent.IDENTIFY, () => this.identify());
-
-    this.getSysInfoDeferred = deferAndCombine(
-      this.fetchSysInfoInternal.bind(this),
-      platform.config.advancedOptions.waitTimeUpdate,
-    );
 
     try {
       this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
@@ -177,12 +170,9 @@ export default abstract class HomeKitDevice {
     return this.removedFromPlatform || this.platform.isShuttingDown;
   }
 
-  protected async getSysInfo(): Promise<boolean> {
-    return await this.getSysInfoDeferred();
-  }
-
-  // True when the lock was read; false when it could not be asked
-  private async fetchSysInfoInternal(): Promise<boolean> {
+  // True when the lock was read; false when it could not be asked. Read at once: polls of a lock run one at a time
+  // under its device lock, so there is nothing to combine, and a wait here would hold up the lock's commands.
+  private async getSysInfo(): Promise<boolean> {
     if (!this.deviceManager) {
       this.log.warn('Device manager not available');
       return false;
