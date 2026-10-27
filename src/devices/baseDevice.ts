@@ -30,6 +30,8 @@ import type { TTLockAccessoryContext } from '../platform.js';
 // of at its slot up to a whole polling interval later
 const UNKNOWN_STATE_POLL_DELAY_MS = 2000;
 const UNKNOWN_STATE_POLL_STAGGER_MS = 5000;
+// That read is skipped while the gateway is busy with another request; it is tried this many times in all
+const UNKNOWN_STATE_POLL_ATTEMPTS = 5;
 
 export default abstract class HomeKitDevice {
   readonly log: Logger;
@@ -43,6 +45,8 @@ export default abstract class HomeKitDevice {
   // Raised whenever polling stops or is scheduled again, so a poll still running from before sets no timer
   private pollingGeneration = 0;
   private pollingIntervalMs = 0;
+  // performance.now() when the next scheduled poll is due
+  private nextPollDueAt = 0;
   protected updateEmitter = new EventEmitter();
   // Every failed poll since the lock last answered, for the log
   private consecutivePollFailures = 0;
@@ -195,12 +199,14 @@ export default abstract class HomeKitDevice {
     return true;
   }
 
-  protected async refreshAndUpdateCharacteristics(forceUpdate: boolean): Promise<void> {
+  // True when the poll was skipped because the lock or its gateway was busy with another request
+  protected async refreshAndUpdateCharacteristics(forceUpdate: boolean): Promise<boolean> {
     const deviceKey = this.ttlockDevice.sys_info.device_id;
     if (!forceUpdate && HomeKitDevice.locks.has(deviceKey)) {
       this.log.debug('Skipping poll; active update lock');
-      return;
+      return true;
     }
+    let skipped = false;
     await this.withLock(deviceKey, async () => {
       if (this.shouldSkipUpdate()) {
         await this.stopPolling();
@@ -223,6 +229,7 @@ export default abstract class HomeKitDevice {
         if (error instanceof TTLockApiError && error.skipped) {
           // Not a failed poll: another request was using the gateway, and the next poll reads the lock
           this.log.debug('Poll skipped: the gateway is busy with another request');
+          skipped = true;
           return;
         }
         this.recordPollFailure(error);
@@ -231,6 +238,7 @@ export default abstract class HomeKitDevice {
         this.updateEmitter.emit('updateComplete');
       }
     });
+    return skipped;
   }
 
   public async startPolling(): Promise<void> {
@@ -253,12 +261,30 @@ export default abstract class HomeKitDevice {
       const unknownStatePollDelay = UNKNOWN_STATE_POLL_DELAY_MS + index * UNKNOWN_STATE_POLL_STAGGER_MS;
       if (unknownStatePollDelay < firstPollDelay) {
         this.log.debug(`Lock state unknown; reading it in ${unknownStatePollDelay}ms`);
-        this.unknownStatePollTimer = setTimeout(() => {
-          this.unknownStatePollTimer = undefined;
-          void this.refreshInBackground(false);
-        }, unknownStatePollDelay);
+        this.scheduleUnknownStatePoll(
+          unknownStatePollDelay,
+          UNKNOWN_STATE_POLL_ATTEMPTS,
+          count * UNKNOWN_STATE_POLL_STAGGER_MS,
+          this.pollingGeneration,
+        );
       }
     }
+  }
+
+  // A read skipped because the gateway or the lock was busy is tried again after retryDelay, which keeps each lock in
+  // its own stagger lane, as long as that is before the lock's regular slot
+  private scheduleUnknownStatePoll(delay: number, attemptsLeft: number, retryDelay: number, generation: number): void {
+    this.unknownStatePollTimer = setTimeout(() => {
+      this.unknownStatePollTimer = undefined;
+      void this.refreshInBackground(false).then(skipped => {
+        if (!skipped || attemptsLeft <= 1 || generation !== this.pollingGeneration || this.shouldSkipUpdate() ||
+          this.isLockStateKnown() || performance.now() + retryDelay >= this.nextPollDueAt) {
+          return;
+        }
+        this.log.debug(`Lock state still unknown and the poll was skipped; reading it again in ${retryDelay}ms`);
+        this.scheduleUnknownStatePoll(retryDelay, attemptsLeft - 1, retryDelay, generation);
+      });
+    }, delay);
   }
 
   private computePollingInterval(): number {
@@ -272,6 +298,7 @@ export default abstract class HomeKitDevice {
   // locks take a second call, and the daily allowance changes during the month. The next poll is due one interval
   // after this one was due, not after it finished, so every lock keeps its slot.
   private schedulePoll(dueAt: number, generation: number): void {
+    this.nextPollDueAt = dueAt;
     this.pollingTimer = setTimeout(() => {
       this.pollingTimer = undefined;
       void this.refreshInBackground(false).then(() => {
@@ -353,11 +380,12 @@ export default abstract class HomeKitDevice {
   }
 
   // Nothing awaits these refreshes, and an unhandled rejection makes Homebridge shut down.
-  private async refreshInBackground(forceUpdate: boolean): Promise<void> {
+  private async refreshInBackground(forceUpdate: boolean): Promise<boolean> {
     try {
-      await this.refreshAndUpdateCharacteristics(forceUpdate);
+      return await this.refreshAndUpdateCharacteristics(forceUpdate);
     } catch (error) {
       this.log.error('Background refresh failed:', error);
+      return false;
     }
   }
 
