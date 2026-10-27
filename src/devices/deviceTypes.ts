@@ -39,6 +39,8 @@ export interface Passcode {
   type?: number | undefined;
   start_date?: number | undefined;
   end_date?: number | undefined;
+  // Where TTLock's list put the code, counting the entries left out; only for the first HomeKit identifiers
+  list_position?: number | undefined;
 }
 
 export interface DescriptorContext {

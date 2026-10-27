@@ -1213,7 +1213,7 @@ export class TTLockApi {
     // An entry without an id or a code cannot be sent to HomeKit; it is left out, and the rest of the list is still
     // used
     const passcodes: Passcode[] = [];
-    for (const item of response.list) {
+    for (const [position, item] of response.list.entries()) {
       const passcodeId = item?.keyboardPwdId;
       const passcode = item?.keyboardPwd;
       if (!item || (typeof passcodeId !== 'number' && typeof passcodeId !== 'string') || passcodeId === '' ||
@@ -1227,6 +1227,7 @@ export class TTLockApi {
         type: this.toOptionalNumber(item.keyboardPwdType),
         start_date: this.toOptionalNumber(item.startDate),
         end_date: this.toOptionalNumber(item.endDate),
+        list_position: position,
       });
     }
     const leftOut = response.list.length - passcodes.length;

@@ -165,11 +165,15 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     let identifiers = context.passcodeIdentifiers;
     let changed = false;
     if (!identifiers) {
-      // Earlier versions used the position in TTLock's list; starting from it keeps the identifiers the Home app has
+      // Earlier versions used the position in TTLock's list, counting the entries that are now left out; starting
+      // from it keeps the identifiers the Home app has. A code with no position (one just added) gets a new number
+      // below, so no two codes share one.
       const seeded: Record<string, number> = {};
-      passcodes.forEach((passcode, position) => {
-        seeded[passcode.passcode_id] ??= position;
-      });
+      for (const passcode of passcodes) {
+        if (passcode.list_position !== undefined) {
+          seeded[passcode.passcode_id] ??= passcode.list_position;
+        }
+      }
       identifiers = seeded;
       changed = true;
     }
