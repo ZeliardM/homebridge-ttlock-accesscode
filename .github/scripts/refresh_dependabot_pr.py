@@ -6,8 +6,9 @@ This script is intended for Dependabot PRs that were originally opened
 against the default "latest" branch and then retargeted to "beta" by the
 workflow. For supported npm lockfile-only PRs, it rebuilds the PR branch from
 origin/beta and reapplies the security fix using `npm audit fix
---package-lock-only`, then force-pushes the refreshed branch so the next
-`synchronize` workflow run can validate and auto-merge it cleanly.
+--package-lock-only`, then force-pushes the refreshed branch. The push is
+made with GITHUB_TOKEN and starts no workflow, so the auto-merge asks for the
+PR to be closed and reopened, which builds and merges the refreshed branch.
 
 If the regenerated branch has no package changes after rebuilding from beta,
 the script creates an empty refresh commit so the PR can still move forward as

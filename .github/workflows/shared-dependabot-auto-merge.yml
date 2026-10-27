@@ -13,6 +13,8 @@ permissions:
 env:
   GITHUB_REPOSITORY: ${{ github.repository }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # The base when the event fired, before the pull request workflow moved the pull request to beta
+  ORIGINAL_PULL_REQUEST_BASE_REF: ${{ github.event.pull_request.base.ref }}
   PULL_REQUEST_AUTHOR: ${{ github.event.pull_request.user.login }}
   PULL_REQUEST_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
   PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
@@ -58,7 +60,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ steps.safety.outputs.block }}" = "false" ]; then
+          if [ "${{ steps.safety.outputs.block }}" = "false" ] && [ "$ORIGINAL_PULL_REQUEST_BASE_REF" != "beta" ]; then
+            {
+              echo "⚠️ Dependabot Update was opened against ${ORIGINAL_PULL_REQUEST_BASE_REF} and moved to beta, so no Pull Request Build runs for it."
+              echo "Close and reopen this pull request to run the build and the Auto-Merge."
+              echo
+              echo "<!-- COPILOT-STICKY:DEPENDABOT -->"
+            } > body.txt
+          elif [ "${{ steps.safety.outputs.block }}" = "false" ]; then
             {
               echo "✅ Dependabot Update is Safe and will be Auto-Merged once the Pull Request Build passes."
               echo
@@ -88,6 +97,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The build runs only for pull requests into beta, and moving one to beta (an edit made with
+          # GITHUB_TOKEN, like the refresh push) starts no workflow, so a pull request opened against
+          # another branch has no build to wait for. Reopening it runs the build and this again.
+          if [ "$ORIGINAL_PULL_REQUEST_BASE_REF" != "beta" ]; then
+            echo "::error::This pull request was opened against ${ORIGINAL_PULL_REQUEST_BASE_REF} and moved to beta, so no Pull Request Build runs for it. Close and reopen it to run the build and the auto-merge."
+            exit 1
+          fi
           # Merge only a commit whose Pull Request Build passed. The build covers every Node version
           # the plugin supports, and an update can break one of them. A new commit gets its own run
           # of this workflow.
@@ -109,7 +125,7 @@ jobs:
               exit 0
             fi
             if [ "$waited" -ge "$max_wait" ]; then
-              echo "::error::No finished Pull Request Build for ${head_oid} after ${max_wait} s. Merge it by hand once the build passes."
+              echo "::error::No finished Pull Request Build for ${head_oid} after ${max_wait} s. Check the Pull Request Build for this commit, or close and reopen the pull request to start one."
               exit 1
             fi
             sleep "$interval"
