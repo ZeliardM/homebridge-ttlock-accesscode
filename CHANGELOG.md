@@ -1,5 +1,5 @@
 # Changelog
-## [v3.0.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.0)
+## [v3.0.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.0) (2026-10-27)
 
 ### Breaking Changes
 
@@ -7,6 +7,7 @@
 
 ### Other Changes
 
+- Update CHANGELOG.md for beta release v3.0.0-beta.0 [beta-release] (@github-actions)
 - npm-dev(deps-dev): bump eslint from 10.12.0 to 10.13.0 [#150](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/150) (@dependabot[bot])
 - npm-dev(deps-dev): bump typescript-eslint from 8.71.2 to 8.72.0 [#149](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/149) (@dependabot[bot])
 - npm-dev(deps-dev): bump typescript-eslint from 8.71.1 to 8.71.2 [#146](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/146) (@dependabot[bot])
