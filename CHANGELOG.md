@@ -1,5 +1,9 @@
 # Changelog
-## [v2.4.0-beta.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.4.0-beta.1)
+## [v3.0.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.0)
+
+### Breaking Changes
+
+- [breaking-change] Make the published plugin TTLock only, bring over the homebridge-kasa-python fixes, and update dependencies [#151](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/151) (@ZeliardM)
 
 ### Other Changes
 
@@ -48,7 +52,7 @@
 - npm(deps): bump @homebridge/plugin-ui-utils from 2.2.3 to 2.2.4 [#81](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/81) (@dependabot[bot])
 - npm-dev(deps-dev): bump typescript-eslint from 8.59.4 to 8.60.0 [#80](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/80) (@dependabot[bot])
 
-**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.4.0-beta.0...v2.4.0-beta.1
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v2.4.0-beta.0...v3.0.0-beta.0
 
 ## [v2.4.0-beta.0](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v2.4.0-beta.0) (2026-05-26)
 
