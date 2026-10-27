@@ -7,7 +7,7 @@ import { inspect } from 'node:util';
 
 import { ApiCallPriority, UsageTracker } from './usageTracker.js';
 import { SimpleMutex } from '../utils.js';
-import { FeatureInfo, Passcode, SysInfo, TTLockDevice } from '../devices/deviceTypes.js';
+import { FeatureInfo, Passcode, PasscodeList, SysInfo, TTLockDevice } from '../devices/deviceTypes.js';
 
 export enum TTLockApiErrorCategory {
   AuthExpired = 'AuthExpired',
@@ -969,9 +969,10 @@ export class TTLockApi {
         ttlockDevice.sys_info.device_id = lock.lockId.toString();
         ttlockDevice.sys_info.mac = lock.lockMac;
         if (ttlockDevice.feature_info.passcode) {
-          const passcodes = await this.getPasscodesForDiscovery(lock.lockId, priority);
-          if (passcodes) {
-            ttlockDevice.sys_info.passcodes = passcodes;
+          const passcodeList = await this.getPasscodesForDiscovery(lock.lockId, priority);
+          if (passcodeList) {
+            ttlockDevice.sys_info.passcodes = passcodeList.passcodes;
+            ttlockDevice.sys_info.passcode_list_length = passcodeList.listLength;
           }
         }
         ttlockDevice.offline = false;
@@ -1002,7 +1003,7 @@ export class TTLockApi {
   }
 
   // A lock whose access codes could not be listed is kept without them; HomeKit lists them when it first asks
-  private async getPasscodesForDiscovery(lockId: string, priority: ApiCallPriority): Promise<Passcode[] | undefined> {
+  private async getPasscodesForDiscovery(lockId: string, priority: ApiCallPriority): Promise<PasscodeList | undefined> {
     try {
       return await this.getPasscodes(lockId, { priority });
     } catch (error) {
@@ -1195,7 +1196,7 @@ export class TTLockApi {
     };
   }
 
-  public async getPasscodes(lockId: string, options: RequestOptions = {}): Promise<Passcode[]> {
+  public async getPasscodes(lockId: string, options: RequestOptions = {}): Promise<PasscodeList> {
     this.log.debug(`Fetching passcodes for lock: ${lockId}`);
     const response = await this.makeAuthenticatedRequest<{
       list: ({
@@ -1239,7 +1240,6 @@ export class TTLockApi {
         start_date: this.toOptionalNumber(item.startDate),
         end_date: this.toOptionalNumber(item.endDate),
         list_position: position,
-        list_length: response.list.length,
       });
     }
     const leftOut = response.list.length - passcodes.length;
@@ -1247,7 +1247,9 @@ export class TTLockApi {
       `Found ${passcodes.length} passcodes for lock: ${lockId}` +
       (leftOut > 0 ? ` (left out ${leftOut} without a passcode id or code)` : ''),
     );
-    return passcodes;
+    // The whole list's length as well, even when every entry is left out: the first HomeKit identifiers start new
+    // codes after it, so a new code never gets the identifier of an entry left out
+    return { passcodes, listLength: response.list.length };
   }
 
   private toOptionalNumber(value: unknown): number | undefined {

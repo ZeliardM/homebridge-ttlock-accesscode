@@ -12,7 +12,7 @@ import {
   buildLockDescriptors,
 } from './descriptorHelpers.js';
 import type TTLockAccessCodePlatform from '../platform.js';
-import type { CharacteristicDescriptor, Lock, Passcode, SysInfo } from './deviceTypes.js';
+import type { CharacteristicDescriptor, Lock, Passcode, PasscodeList, SysInfo } from './deviceTypes.js';
 
 const { TlvFactory } = pkg;
 
@@ -36,7 +36,7 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
     // Now, from the list discovery just read, rather than when HomeKit first asks: a later discovery may read the
     // list in another order, and the first identifiers come from the order
     if (this.hasPasscode && Array.isArray(ttlockDevice.sys_info.passcodes)) {
-      this.syncPasscodeIdentifiers(ttlockDevice.sys_info.passcodes);
+      this.syncPasscodeIdentifiers(ttlockDevice.sys_info.passcodes, ttlockDevice.sys_info.passcode_list_length);
     }
   }
 
@@ -142,25 +142,26 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       return await this.refreshPasscodes(device);
     }
     // Discovery may have put a newer list in place
-    this.syncPasscodeIdentifiers(device.passcodes);
+    this.syncPasscodeIdentifiers(device.passcodes, device.passcode_list_length);
     return device.passcodes;
   }
 
   private async refreshPasscodes(device: SysInfo): Promise<Passcode[]> {
-    const passcodes = await this.deviceManager!.managePasscodes(device.device_id, 'get') as Passcode[];
+    const { passcodes, listLength } = await this.deviceManager!.managePasscodes(device.device_id, 'get') as PasscodeList;
+    device.passcode_list_length = listLength;
     this.setCachedPasscodes(device, passcodes);
     return passcodes;
   }
 
   private setCachedPasscodes(device: SysInfo, passcodes: Passcode[]): void {
     device.passcodes = passcodes;
-    this.syncPasscodeIdentifiers(passcodes);
+    this.syncPasscodeIdentifiers(passcodes, device.passcode_list_length);
   }
 
   // HomeKit keeps the identifier it was given for each access code and later reads and removes codes by it, so an
   // identifier stays with its code and is never given to another one, even after that code is gone. Saved with the
-  // accessory, by TTLock passcode id.
-  private syncPasscodeIdentifiers(passcodes: Passcode[]): void {
+  // accessory, by TTLock passcode id. listLength: how many entries TTLock's list had, counting the ones left out.
+  private syncPasscodeIdentifiers(passcodes: Passcode[], listLength: number | undefined): void {
     const context = this.homebridgeAccessory.context;
     let identifiers = context.passcodeIdentifiers;
     let changed = false;
@@ -170,14 +171,14 @@ export default class HomeKitDeviceLock extends HomeKitDevice {
       // Earlier versions used the position in TTLock's list, counting the entries that are now left out; starting
       // from it keeps the identifiers the Home app has. A code with no position (one just added) gets a new number
       // below, so no two codes share one. New codes start after the whole list, so they do not get the identifier
-      // of an entry left out at its end either.
+      // of an entry left out at its end either, even when every entry is left out.
       const seeded: Record<string, number> = {};
       for (const passcode of passcodes) {
         if (passcode.list_position !== undefined) {
           seeded[passcode.passcode_id] ??= passcode.list_position;
         }
-        reserved = Math.max(reserved, passcode.list_length ?? 0);
       }
+      reserved = listLength ?? 0;
       identifiers = seeded;
       changed = true;
     }

@@ -367,6 +367,7 @@ export default abstract class HomeKitDevice {
     // Picks up codes changed in the TTLock app, unless HomeKit changed codes after discovery read them
     if (Array.isArray(device.sys_info.passcodes) && !this.isUpdating && this.lastWriteAt < discoveryStartedAt) {
       sysInfo.passcodes = device.sys_info.passcodes;
+      sysInfo.passcode_list_length = device.sys_info.passcode_list_length;
     }
   }
 

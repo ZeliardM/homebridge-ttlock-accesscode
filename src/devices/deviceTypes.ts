@@ -13,6 +13,9 @@ export interface SysInfo {
   mac: string;
   model: string;
   passcodes?: Passcode[];
+  // How many entries TTLock's list of access codes had, counting the ones left out of passcodes; only for the first
+  // HomeKit identifiers
+  passcode_list_length?: number | undefined;
   state: number;
   [key: string]: string | number | boolean | Passcode[] | undefined;
 }
@@ -39,10 +42,15 @@ export interface Passcode {
   type?: number | undefined;
   start_date?: number | undefined;
   end_date?: number | undefined;
-  // Where TTLock's list put the code, counting the entries left out, and how many entries that list had; only for
-  // the first HomeKit identifiers
+  // Where TTLock's list put the code, counting the entries left out; only for the first HomeKit identifiers
   list_position?: number | undefined;
-  list_length?: number | undefined;
+}
+
+// TTLock's list of a lock's access codes: the codes that can be sent to HomeKit, and how many entries the list had,
+// counting the ones left out
+export interface PasscodeList {
+  passcodes: Passcode[];
+  listLength: number;
 }
 
 export interface DescriptorContext {

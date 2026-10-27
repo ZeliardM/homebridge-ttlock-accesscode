@@ -7,7 +7,7 @@ import TTLockAccessCodePlatform from '../platform.js';
 import DirigeraApi from '../api/dirigeraApi.js';
 import HomeKitDeviceDoor from './homekitDoor.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from '../settings.js';
-import type { Passcode, SysInfo } from './deviceTypes.js';
+import type { PasscodeList, SysInfo } from './deviceTypes.js';
 import type {
   DirigeraDoorSensorUnavailable,
   DirigeraDoorSensorUpdate,
@@ -269,7 +269,7 @@ export default class DeviceManager {
     deviceId: string,
     operation: string,
     passcode?: string,
-  ): Promise<Passcode[] | { keyboardPwdId: string } | void> {
+  ): Promise<PasscodeList | { keyboardPwdId: string } | void> {
     // An add or delete is not sent once HomeKit has stopped waiting for it. A read has no time limit, so the
     // passcode list can still be refreshed after a slow write.
     const sendBy = homeKitWriteDeadline.getStore();
