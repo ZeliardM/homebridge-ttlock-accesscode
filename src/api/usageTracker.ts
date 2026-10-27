@@ -84,10 +84,14 @@ export class UsageTracker extends EventEmitter {
   }
 
   // A usage file that cannot be read or does not hold valid usage must neither turn the budget off nor start the
-  // month again at 0: usage then starts from what an evenly used month would have used by today.
+  // month again at 0: usage then starts from the last save left in .tmp (see useSaveLeftInTemp), or else from what an
+  // evenly used month would have used by today.
   private async loadOrInit(): Promise<void> {
     const now = new Date();
-    const stored = this.storageFilePath ? await this.readStoredUsage(this.storageFilePath) : undefined;
+    let stored = this.storageFilePath ? await this.readStoredUsage(this.storageFilePath) : undefined;
+    if (this.storageFilePath) {
+      stored = await this.useSaveLeftInTemp(this.storageFilePath, stored, now);
+    }
     if (stored === null) {
       this.log.debug('Usage file not found, initializing new usage state');
       this.state = this.newMonthState(now, 0);
@@ -141,6 +145,41 @@ export class UsageTracker extends EventEmitter {
     return undefined;
   }
 
+  // A save is written to .tmp in full before it is renamed into place, so a .tmp that is still there holds a whole save
+  // that did not get into place: Homebridge stopped between moving an unusable usage file aside and the rename, or the
+  // rename failed. It is used when it holds this month's usage and the usage file is missing, cannot be read, does not
+  // hold valid usage, or counts fewer calls this month.
+  private async useSaveLeftInTemp(
+    filePath: string,
+    stored: Pick<StoredUsage, 'year' | 'month' | 'used'> | null | undefined,
+    now: Date,
+  ): Promise<Pick<StoredUsage, 'year' | 'month' | 'used'> | null | undefined> {
+    const tempPath = `${filePath}.tmp`;
+    let saved: unknown;
+    try {
+      saved = JSON.parse(await fs.readFile(tempPath, 'utf8'));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') {
+        this.log.debug(`Not using the API usage saved in ${tempPath}: ${errorText(err)}`);
+      }
+      return stored;
+    }
+    if (!isStoredUsage(saved) || this.isNewMonth(saved, now)) {
+      this.log.debug(`Not using the API usage saved in ${tempPath}: it does not hold valid usage for this month`);
+      return stored;
+    }
+    if (stored && !this.isNewMonth(stored, now) && stored.used >= saved.used) {
+      return stored;
+    }
+    const usageFile = stored === null ? 'was not found' :
+      stored === undefined ? 'could not be used' : 'counts fewer calls this month';
+    this.log.warn(
+      `The API usage file ${filePath} ${usageFile}; counting API usage from the last save, left in ${tempPath}: ` +
+      `${saved.used} of ${this.totalAllowed} calls used so far this month`,
+    );
+    return saved;
+  }
+
   // The file's content, or null when there is none. A file that is there but could not be read this time (EIO,
   // EMFILE) is read once more before giving up on it.
   private async readUsageFile(filePath: string): Promise<string | null> {
@@ -181,8 +220,20 @@ export class UsageTracker extends EventEmitter {
     const tempPath = `${this.storageFilePath}.tmp`;
     try {
       await fs.writeFile(tempPath, JSON.stringify(this.state), 'utf8');
-      await this.moveUnusableFileAside(this.storageFilePath);
-      await fs.rename(tempPath, this.storageFilePath);
+      const asidePath = await this.moveUnusableFileAside(this.storageFilePath);
+      try {
+        await fs.rename(tempPath, this.storageFilePath);
+      } catch (err) {
+        if (asidePath) {
+          await this.moveAsideFileBack(asidePath, this.storageFilePath);
+        }
+        throw err;
+      }
+      if (asidePath) {
+        const what = this.unusableFile === 'unreadable' ? 'could not be read' : 'did not hold valid usage';
+        this.unusableFile = undefined;
+        this.log.info(`Moved the API usage file that ${what} to ${asidePath}`);
+      }
       if (this.persistFailing) {
         this.persistFailing = false;
         this.log.info('Saving API usage data works again');
@@ -198,28 +249,46 @@ export class UsageTracker extends EventEmitter {
   }
 
   // Called once the save that replaces the file has been written, so a save that cannot be written leaves the file in
-  // place. When the file cannot be moved, the save is not put in its place either.
-  private async moveUnusableFileAside(filePath: string): Promise<void> {
+  // place. When the file cannot be moved, the save is not put in its place either. Returns where the file was moved.
+  private async moveUnusableFileAside(filePath: string): Promise<string | undefined> {
     const kind = this.unusableFile;
     if (!kind) {
-      return;
+      return undefined;
     }
     const asidePath = `${filePath}.${kind}-${Date.now()}`;
     try {
       await fs.rename(filePath, asidePath);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') {
-        throw new Error(`could not move the API usage file aside to ${asidePath}: ${errorText(err)}`, { cause: err });
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== 'ENOENT') {
+        const owner = code === 'EPERM' || code === 'EACCES'
+          ? '. The usage file or its folder belongs to another user; that must be fixed for API usage to be saved'
+          : '';
+        throw new Error(
+          `could not move the API usage file aside to ${asidePath}: ${errorText(err)}${owner}`,
+          { cause: err },
+        );
       }
       // It is gone already
       this.unusableFile = undefined;
-      return;
+      return undefined;
     }
-    this.unusableFile = undefined;
-    this.log.info(
-      `Moved the API usage file that ${kind === 'unreadable' ? 'could not be read' : 'did not hold valid usage'} to ` +
-      asidePath,
-    );
+    return asidePath;
+  }
+
+  // The save could not be put in place after the unusable file was moved aside. Put the file back, so the usage path
+  // is not left empty and the next save moves it aside again. If it stays aside, the next start reads the save left in
+  // .tmp, and the next save goes straight into place.
+  private async moveAsideFileBack(asidePath: string, filePath: string): Promise<void> {
+    try {
+      await fs.rename(asidePath, filePath);
+    } catch (err) {
+      this.unusableFile = undefined;
+      this.log.error(
+        `The API usage file was moved to ${asidePath} and could not be moved back after the save failed: ` +
+        errorText(err),
+      );
+    }
   }
 
   public getUsage() {
