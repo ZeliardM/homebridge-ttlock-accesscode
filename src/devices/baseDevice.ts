@@ -212,6 +212,11 @@ export default abstract class HomeKitDevice {
         await this.updateAllServicesAndCharacteristics(forceUpdate);
         this.previousSnapshot = JSON.parse(JSON.stringify(this.ttlockDevice));
       } catch (error) {
+        if (this.platform.isShuttingDown) {
+          // Not a failed poll: shutdown stopped the client, so the request was not sent or its answer no longer matters
+          this.log.debug(`Poll stopped by shutdown: ${error instanceof Error ? error.message : String(error)}`);
+          return;
+        }
         if (error instanceof TTLockApiError && error.skipped) {
           // Not a failed poll: another request was using the gateway, and the next poll reads the lock
           this.log.debug('Poll skipped: the gateway is busy with another request');
