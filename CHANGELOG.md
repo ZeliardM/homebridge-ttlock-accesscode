@@ -1,4 +1,12 @@
 # Changelog
+## [v3.0.0-beta.2](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.2)
+
+### Other Changes
+
+- [other] Update tooling and align the supported Node minimum [#153](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/153) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v3.0.0-beta.1...v3.0.0-beta.2
+
 ## [v3.0.0-beta.1](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.1) (2026-10-27)
 
 ### Bug Fixes
