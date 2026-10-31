@@ -1,4 +1,12 @@
 # Changelog
+## [v3.0.0-beta.3](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.3)
+
+### Bug Fixes
+
+- [fix] Keep a published release published when a late release flow updates it [#154](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/154) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v3.0.0-beta.2...v3.0.0-beta.3
+
 ## [v3.0.0-beta.2](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.2) (2026-10-31)
 
 ### Other Changes
