@@ -1,4 +1,12 @@
 # Changelog
+## [v3.0.0-beta.4](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.4)
+
+### Other Changes
+
+- [other] Build and type check against Homebridge 2.5.0 [#155](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/155) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v3.0.0-beta.3...v3.0.0-beta.4
+
 ## [v3.0.0-beta.3](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.3) (2026-10-31)
 
 ### Bug Fixes
