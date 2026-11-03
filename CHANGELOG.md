@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- [other] Refresh ESLint and plugin-ui-utils to their latest versions [#156](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/156) (@ZeliardM)
 - [other] Build and type check against Homebridge 2.5.0 [#155](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/155) (@ZeliardM)
 
 **Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v3.0.0-beta.3...v3.0.0-beta.4
