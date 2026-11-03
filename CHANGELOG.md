@@ -1,4 +1,12 @@
 # Changelog
+## [v3.0.0-beta.5](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.5)
+
+### Other Changes
+
+- [other] Update rimraf to 6.1.4 [#157](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/157) (@ZeliardM)
+
+**Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v3.0.0-beta.4...v3.0.0-beta.5
+
 ## [v3.0.0-beta.4](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.4) (2026-11-03)
 
 ### Other Changes
