@@ -1,8 +1,9 @@
 # Changelog
-## [v3.0.0-beta.4](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.4)
+## [v3.0.0-beta.4](https://github.com/ZeliardM/homebridge-ttlock-accesscode/releases/tag/v3.0.0-beta.4) (2026-11-03)
 
 ### Other Changes
 
+- Update CHANGELOG.md for beta release v3.0.0-beta.4 [beta-release] (@github-actions)
 - [other] Refresh ESLint and plugin-ui-utils to their latest versions [#156](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/156) (@ZeliardM)
 - [other] Build and type check against Homebridge 2.5.0 [#155](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/155) (@ZeliardM)
 
