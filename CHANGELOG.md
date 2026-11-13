@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- npm-dev(deps-dev): bump typescript-eslint from 8.72.1 to 8.72.2 [#158](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/158) (@dependabot[bot])
 - [other] Update rimraf to 6.1.4 [#157](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/157) (@ZeliardM)
 
 **Full Changelog**: https://github.com/ZeliardM/homebridge-ttlock-accesscode/compare/v3.0.0-beta.4...v3.0.0-beta.5
