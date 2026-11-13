@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- npm(deps): bump axios from 1.21.0 to 1.21.1 [#159](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/159) (@dependabot[bot])
 - npm-dev(deps-dev): bump typescript-eslint from 8.72.1 to 8.72.2 [#158](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/158) (@dependabot[bot])
 - [other] Update rimraf to 6.1.4 [#157](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/157) (@ZeliardM)
 
