@@ -57,7 +57,7 @@
     "nodemon": "^3.1.14",
     "rimraf": "^6.1.4",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.72.2"
+    "typescript-eslint": "^8.73.0"
   },
   "homepage": "https://github.com/ZeliardM/homebridge-ttlock-accesscode#readme",
   "funding": [
@@ -76,6 +76,6 @@
     "ber-tlv": "^0.9.2"
   },
   "overrides": {
-    "minimatch": "11.0.8"
+    "minimatch": "11.0.9"
   }
 }
