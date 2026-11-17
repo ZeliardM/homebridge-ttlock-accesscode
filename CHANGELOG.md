@@ -3,6 +3,7 @@
 
 ### Other Changes
 
+- [enhancement] Refresh dependency tooling and transitive packages [#163](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/163) (@ZeliardM)
 - [other] Update Stylistic to 6.0.1 [#162](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/162) (@ZeliardM)
 - [other] Update ESLint and resolve minimatch audit findings [#161](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/161) (@ZeliardM)
 - npm(deps): bump @homebridge/plugin-ui-utils from 2.2.7 to 2.3.0 [#160](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/160) (@dependabot[bot])
