@@ -4,6 +4,7 @@
 ### Other Changes
 
 - npm-dev(deps-dev): bump @types/node from 26.6.6 to 26.6.7 [#165](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/165) (@dependabot[bot])
+- npm-dev(deps-dev): bump typescript-eslint from 8.73.0 to 8.74.0 [#164](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/164) (@dependabot[bot])
 - [enhancement] Refresh dependency tooling and transitive packages [#163](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/163) (@ZeliardM)
 - [other] Update Stylistic to 6.0.1 [#162](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/162) (@ZeliardM)
 - [other] Update ESLint and resolve minimatch audit findings [#161](https://github.com/ZeliardM/homebridge-ttlock-accesscode/pull/161) (@ZeliardM)
